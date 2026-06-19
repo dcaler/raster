@@ -1,0 +1,90 @@
+# {{PROJECT}} build spec — TWO-LEVEL, test-driven tasks for local LLM workers.
+# BUILD MACHINERY (git-ignored). Authored during `raster plan`; consumed by `raster build`.
+#
+# TWO LEVELS:
+#   * TASK   -> has a UNIT TEST. Scope = one deliverable file. "Does this file meet its spec?"
+#              Pass -> task done; fail -> block the next task.
+#   * MODULE -> has a GATE = an INTEGRATION TEST composing the module's tasks (and upstream
+#              modules). Runs only after ALL the module's tasks pass. Pass -> release next
+#              module; fail -> block next module.
+#
+# TEST STRATEGY = frozen-by-strong: a Phase-0 (P0.*) phase authors ALL tests into
+# code/tests/ FIRST, with hand-computed, internally-consistent golden values. The doer
+# then writes IMPLEMENTATION ONLY for M* tasks and never creates/edits anything under tests/.
+#
+# Per-task contract:   {id, title, worker, depends_on, deliverables, spec, unit_test:{file,cmd}}
+# Per-module contract: {id, name, worker, tasks:[...], gate:{id, integration_test:{file,cmd}, spec}}
+# worker is "strong" or "worker" (mapped to the models in meta.workers).
+
+orchestration:
+  task:    {advance_on: unit_test_pass, on_fail: block_next_task}
+  module:  {run_gate_when: all_tasks_pass, advance_on: gate_pass, on_fail: block_next_module}
+  notify:  email
+  git:     commit_and_push_on_pass
+
+meta:
+  project: {{PROJECT}}
+  package: {{PACKAGE}}
+  root: code/
+  trundlr_project_id: {{TRUNDLR_PROJECT_ID}}
+  think: false                    # ollama reasoning off (slow local models; little payoff)
+  workers:
+    strong: {{STRONG_MODEL}}
+    worker: {{WORKER_MODEL}}
+  python: "{{PYTHON_VERSION}}"
+  runtime_deps: []                # FILL during plan — runtime imports the build needs
+  test_deps: [pytest]
+
+execution:
+  trundlr_api: {{TRUNDLR_API}}
+  project_id: {{TRUNDLR_PROJECT_ID}}
+  resources: {gpu: {{GPU}}, cpu: {{CPU}}}
+  ollama_host: {{OLLAMA_HOST}}
+  test_strategy: frozen-by-strong
+
+# ===========================================================================
+# modules: authored during `raster plan`. Leave [] until the design is settled.
+# A worked EXAMPLE of the schema is in the comment block below — copy & adapt.
+# ===========================================================================
+modules: []
+
+# --- EXAMPLE (delete the leading '#'s and adapt; remove `modules: []` above) ---
+#
+#   # PHASE 0 — freeze the tests first (strong model authors code/tests/).
+#   - id: P0
+#     name: test-infra
+#     worker: strong
+#     tasks:
+#       - id: P0.T0
+#         title: Harness, shared fixtures, golden values
+#         worker: strong
+#         depends_on: []
+#         deliverables: [tests/conftest.py, tests/golden/]
+#         spec: >
+#           Author pytest scaffolding shared by all modules: fixtures and hand-computed
+#           golden values. Internally consistent (counts equal what they count, etc.).
+#         unit_test: {file: tests/, cmd: pytest --collect-only -q tests/}
+#       - id: P0.M0
+#         title: Freeze M0 tests
+#         worker: strong
+#         depends_on: [P0.T0]
+#         deliverables: [tests/test_smoke.py, tests/gate_scaffold.py]
+#         spec: "Author frozen unit + gate tests for M0 per its specs (must collect, fail RED)."
+#         unit_test: {file: tests/gate_scaffold.py, cmd: pytest --collect-only -q tests/}
+#
+#   # IMPLEMENTATION modules — write impl only; satisfy the frozen tests.
+#   - id: M0
+#     name: scaffold
+#     worker: worker
+#     tasks:
+#       - id: M0.T1
+#         title: Package scaffold + import smoke
+#         worker: worker
+#         depends_on: [P0.M0]
+#         deliverables: [{{PACKAGE}}/__init__.py, pyproject.toml]
+#         spec: "Create the package so it imports cleanly and the smoke test passes."
+#         unit_test: {file: tests/test_smoke.py, cmd: pytest -q tests/test_smoke.py}
+#     gate:
+#       id: G0
+#       spec: "Package imports and exposes its public surface."
+#       integration_test: {file: tests/gate_scaffold.py, cmd: pytest -q tests/gate_scaffold.py}

@@ -1,0 +1,27 @@
+# {{PROJECT}} — Build Progress
+
+*Human-facing mirror of trundlr task + gate state. Source of truth: [`tasks.yaml`](./tasks.yaml).
+Status legend: ⬜ pending · 🟦 in_progress · ✅ done · ❌ failed · ⛔ blocked*
+
+Last updated: {{DATE}} (scaffolded by `raster init` — design not yet authored)
+
+Two levels: each **task** has a **unit test**; each **module** has a **gate** =
+integration test that runs after all its tasks pass and releases the next module.
+
+## Module gates
+
+| Gate | Module | Worker | Status | Gate (integration test) |
+|---|---|---|---|---|
+| — | _(author during `raster plan`)_ | — | ⬜ | — |
+
+## Tasks (unit tests)
+
+| Task | Title | Worker | Depends on | Status |
+|---|---|---|---|---|
+| — | _(author during `raster plan`)_ | — | — | ⬜ |
+
+## How this file is maintained
+
+Each worker updates its task row at task end: ✅ on green unit test → release next
+task; ❌ → set the dependent task ⛔ blocked. When all of a module's tasks are ✅, the
+**gate** runs: ✅ → release next module; ❌ → next module ⛔ blocked.

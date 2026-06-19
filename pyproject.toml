@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "raster"
+version = "0.1.0"
+description = "Offline-first, test-driven code builder — rasterizes a design spec into a built repo via local LLMs."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = ["PyYAML>=6"]
+
+[project.scripts]
+raster = "raster.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["raster*"]
+
+[tool.setuptools.package-data]
+raster = ["templates/*.tmpl"]

@@ -1,0 +1,27 @@
+# raster project config — BUILD MACHINERY, not shipped (git-ignored).
+# Written by `raster init`. Read by `raster plan` and `raster build`.
+# Personal/account details never live here — those stay in ~/.config/raster/config.toml.
+
+project: {{PROJECT}}
+package: {{PACKAGE}}            # impl files live under code/{{PACKAGE}}/
+description: >
+  {{DESCRIPTION}}
+language: python
+python: "{{PYTHON_VERSION}}"
+test_runner: {{TEST_RUNNER}}
+
+git:
+  remote: git@{{GIT_HOST}}:{{OWNER}}/{{PROJECT}}.git   # this project's OWN repo (not the raster tool's)
+  visibility: {{VISIBILITY}}
+
+trundlr:
+  api_url: {{TRUNDLR_API}}
+  project_id: {{TRUNDLR_PROJECT_ID}}
+  resources: {gpu: {{GPU}}, cpu: {{CPU}}, cale: {{CALE}}, claude: {{CLAUDE}}}
+
+models:
+  strong: {{STRONG_MODEL}}      # tricky tasks + Phase-0 test authoring + gates
+  worker: {{WORKER_MODEL}}      # boilerplate / scaffolding
+
+# The executable build spec is designdocs/tasks.yaml (also git-ignored),
+# authored during `raster plan` and consumed by `raster build`.

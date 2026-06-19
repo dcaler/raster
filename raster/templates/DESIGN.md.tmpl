@@ -1,0 +1,61 @@
+# {{PROJECT}} — Design
+
+*Status: DRAFT — to be completed during `raster plan` (Cale + Claude) · created {{DATE}}*
+*All code lives under `code/`. This file is human-facing; the executable build spec
+is [`tasks.yaml`](./tasks.yaml).*
+
+> One-liner (from `raster init`): {{DESCRIPTION}}
+
+<!--
+  PLANNING SESSION: this is a skeleton. A Claude `raster plan` session should fill
+  each section IN COLLABORATION WITH CALE, reading the project's existing materials
+  first (see PLANNING.md). Keep it tight and concrete — every design decision here
+  should map to a module/task in tasks.yaml. Delete these HTML comments as you go.
+-->
+
+## 1. Aim
+<!-- What is being built and why, in 2–4 sentences. The research/engineering goal,
+     the core question, and what "done" looks like. -->
+
+## 2. The spine
+<!-- The single organizing idea the rest of the design hangs off (a data model, a
+     time axis, a pipeline). State it once, clearly; everything else refers back. -->
+
+## 3. Key concepts / domain model
+<!-- The nouns of the system and how they relate. A table or short glossary.
+     These become the types/classes implemented in code/{{PACKAGE}}/. -->
+
+## 4. Module architecture (under `code/`)
+<!-- The decomposition into modules. Each module = a coherent unit with its own
+     integration GATE; each task within it = one deliverable file with a UNIT test.
+     Sketch the package layout and name the modules M0..Mn. This section maps
+     1:1 onto tasks.yaml `modules:`. -->
+
+```
+code/
+  pyproject.toml
+  {{PACKAGE}}/
+    __init__.py
+    # ... modules ...
+```
+
+## 5. Interfaces & contracts
+<!-- The signatures/protocols that modules agree on. These pin what the Phase-0
+     frozen tests will assert, so be precise about inputs, outputs, and invariants. -->
+
+## 6. Testing strategy
+<!-- frozen-by-strong: Phase 0 authors ALL tests (with hand-computed golden values)
+     BEFORE any implementation; impl tasks then satisfy them and never touch tests/.
+     Note any fixtures, golden values, or determinism/seed requirements here. -->
+
+## 7. Dependencies & runtime
+<!-- runtime_deps / test_deps (mirror into tasks.yaml meta), target python {{PYTHON_VERSION}},
+     and any external assets (data files, models, soundfonts, services). -->
+
+## 8. Build & orchestration
+<!-- How the build runs: `raster build` linearizes tasks.yaml into a trundlr chain
+     (single-parent depends_on; a failure auto-blocks downstream). Each green
+     task/gate commits code/ and pushes to {{OWNER}}/{{PROJECT}}. Usually leave as-is. -->
+
+## 9. Open decisions
+<!-- Anything deliberately deferred. Keep non-blocking choices out of the critical path. -->
