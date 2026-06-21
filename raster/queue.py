@@ -72,7 +72,7 @@ def run_queue(args) -> int:
     api = project.cfg.trundlr_api
 
     try:
-        trundlr.set_project_directory(api, int(pid), str(project.root))
+        trundlr.set_project_directory(api, trundlr.coerce_id(pid), str(project.root))
         print(f"[raster queue] set project {pid} directory -> {project.root}")
     except Exception as e:
         print(f"[raster queue] warning: could not set project_directory: {e}")
@@ -83,7 +83,7 @@ def run_queue(args) -> int:
             "title": c["title"],
             "description": c["description"],
             "command": c["command"],
-            "project_id": int(pid),
+            "project_id": trundlr.coerce_id(pid),
             "resource_ids": [c["resource"]],
             "depends_on_id": prev_id,
             "duration": c["duration"],

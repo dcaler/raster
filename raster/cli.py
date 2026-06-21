@@ -17,10 +17,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     init = sub.add_parser("init", help="scaffold a project's code/ tree, repo, design-doc stubs")
     _common(init)
-    init.add_argument("--name", help="project name (= repo name)")
-    init.add_argument("--package", help="package / import name")
-    init.add_argument("--description", help="one-line project description")
-    init.add_argument("--python", help="target Python version (e.g. 3.11)")
+    init.add_argument("--name", help="project name (= repo name; import name is its slug)")
+    init.add_argument("--brief", help="long-form 'what do you want to build' (else prompted)")
     init.add_argument("--visibility", choices=["private", "public"],
                       help="GitHub repo visibility (asked if omitted)")
     init.add_argument("--trundlr-project-id", dest="trundlr_project_id",

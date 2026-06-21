@@ -11,7 +11,7 @@ using local LLM workers via Ollama, orchestrated by trundlr.
 
 ```
 raster init           ▸ scaffold code/, its git repo, design-doc stubs; queue a plan task
-raster plan           ▸ (interactive: Cale + Claude) author DESIGN.md + tasks.yaml   [next]
+raster plan           ▸ (interactive: you + Claude) author DESIGN.md + tasks.yaml   [next]
 raster queue          ▸ linearize tasks.yaml -> submit the trundlr build chain
 raster build <id>     ▸ run one coding task (LLM implements/authors vs the frozen test)
 raster test  <id>     ▸ run a gate or a unit-test assessment (no LLM)
@@ -36,7 +36,7 @@ GitHub repo), a reachable trundlr API, and Ollama for the eventual build step.
 ## Machine setup
 
 First run writes `~/.config/raster/config.toml` with defaults — Ollama models,
-the trundlr API + resource ids (`cale`, `claude`, gpu, cpu), and a **non-PII git
+the trundlr API + resource ids (`human`, `claude`, gpu, cpu), and a **non-PII git
 identity** used for commits in built repos (`co_authorship = false`). Personal
 details live only here and never enter a project.
 
@@ -57,7 +57,7 @@ raster init
   (`DESIGN.md`, `tasks.yaml`, `PROGRESS.md` + a `PLANNING.md` playbook),
 - creates the project's own git repo named after it (`git init` + `gh repo create
   dcaler/<project>`, visibility asked per init) under the non-PII identity,
-- queues an interactive **plan** task in trundlr assigned to **Cale + Claude**.
+- queues an interactive **plan** task in trundlr assigned to **you + Claude**.
 
 Then open a Claude session in the folder and run `raster plan` — it reads
 `PLANNING.md`, absorbs the project's existing materials, and leads the design

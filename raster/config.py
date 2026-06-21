@@ -65,7 +65,7 @@ worker = "llama3.1:8b"       # scaffolding / boilerplate
 api_url      = "http://100.87.86.57:8251"
 gpu_resource = 2             # runs LLM/doer tasks
 cpu_resource = 3             # runs gate pytest
-cale_resource   = 0          # human (Cale) trundlr resource id — set this to queue plan tasks
+human_resource  = 0          # human reviewer's trundlr resource id — set this to queue plan tasks
 claude_resource = 0          # Claude agent trundlr resource id — set this to queue plan tasks
 
 [git]
@@ -90,7 +90,7 @@ class Config:
     trundlr_api: str = "http://100.87.86.57:8251"
     gpu_resource: int = 2
     cpu_resource: int = 3
-    cale_resource: int = 0
+    human_resource: int = 0
     claude_resource: int = 0
     git_host: str = "github.com"
     git_owner: str = "dcaler"
@@ -121,7 +121,7 @@ def load_config(create: bool = True) -> Config:
         trundlr_api=t.get("api_url", Config.trundlr_api),
         gpu_resource=int(t.get("gpu_resource", Config.gpu_resource)),
         cpu_resource=int(t.get("cpu_resource", Config.cpu_resource)),
-        cale_resource=int(t.get("cale_resource", Config.cale_resource)),
+        human_resource=int(t.get("human_resource", Config.human_resource)),
         claude_resource=int(t.get("claude_resource", Config.claude_resource)),
         git_host=g.get("host", Config.git_host),
         git_owner=g.get("owner", Config.git_owner),

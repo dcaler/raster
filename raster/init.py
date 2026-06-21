@@ -6,6 +6,7 @@ paper/). raster scaffolds and works entirely inside code/, never at the root.
 The root is almost never empty and may lack code/ — both are fine.
 """
 
+import json
 import re
 import shutil
 import subprocess
@@ -28,6 +29,13 @@ def slugify(name: str) -> str:
     return re.sub(r"[^a-z0-9]", "", name.lower()) or "package"
 
 
+def project_name_from_dir(dirname: str) -> str:
+    """Guess a project name from the working-dir name the way the ra* family does:
+    strip a leading {YYMMDD}_ (or {YYYYMMDD}_) datestamp prefix. e.g.
+    '260618_raster' -> 'raster'. No datestamp -> the name unchanged."""
+    return re.sub(r"^\d{6}(?:\d\d)?_", "", dirname) or dirname
+
+
 def render(template_name: str, ctx: dict) -> str:
     text = (files("raster") / "templates" / template_name).read_text()
     for key, val in ctx.items():
@@ -47,6 +55,26 @@ def ask(prompt: str, default=None, preset=None) -> str:
     except EOFError:
         resp = ""
     return resp or ("" if default is None else str(default))
+
+
+def ask_longform(prompt: str, preset=None) -> str:
+    """Read a multi-line, free-form answer (the 'what do you want to build' brief).
+    A preset (CLI arg) short-circuits; non-interactive -> empty. Interactively, the
+    user types as much as they like and ends with Ctrl-D on a blank line."""
+    if preset is not None:
+        return preset
+    if not sys.stdin.isatty():
+        return ""
+    print(f"  {prompt}")
+    print("  (write as much as you like — the more the planner has to work with, the better;")
+    print("   finish with Ctrl-D on a blank line)")
+    lines = []
+    try:
+        while True:
+            lines.append(input())
+    except EOFError:
+        pass
+    return "\n".join(lines).strip()
 
 
 def _run(cmd, cwd=None):
@@ -116,26 +144,36 @@ def run_init(args) -> int:
             prior = {}
 
     log(f"project root: {root}")
-    name = ask("Project name", default=prior.get("project") or root.name, preset=args.name)
-    package = ask("Package / import name", default=prior.get("package") or slugify(name),
-                  preset=args.package)
-    description = ask("One-line description", default=prior.get("description", "").strip(),
-                      preset=args.description)
-    python_version = ask("Python version", default=prior.get("python", "3.11"),
-                         preset=args.python)
+    name = ask("Project name", default=prior.get("project") or project_name_from_dir(root.name),
+               preset=args.name)
+    # long-form intent — the raw material `raster plan` designs from (stored in raster.yaml).
+    brief = ask_longform("What do you want to build today?", preset=args.brief).strip()
+    if not brief:
+        brief = (prior.get("brief") or "").strip()   # keep a prior brief on re-init
+    package = slugify(name)   # import name is always the slugified project name (not asked)
+    # one-line description is NOT asked here — `raster plan` generates it from the detailed
+    # design + planning session (it feeds the build LLM prompts), and writes it to raster.yaml.
+    # A prior value (from a previous plan) is preserved across re-init.
+    description = (prior.get("description") or "").strip()
+    # python version is metadata only (tests run under raster's own interpreter), so it isn't
+    # asked — default 3.11 (the shipped target); a prior value is preserved on re-init.
+    python_version = prior.get("python") or "3.11"
     visibility = ask("Repo visibility (private/public)",
                      default=(prior.get("git", {}) or {}).get("visibility", "private"),
                      preset=args.visibility).lower()
     if visibility not in ("private", "public"):
         visibility = "private"
-    tid_default = (prior.get("trundlr", {}) or {}).get("project_id", "")
-    trundlr_id = ask("trundlr project id (blank to skip trundlr)",
-                     default=tid_default, preset=args.trundlr_project_id)
+    # default the trundlr project id to the project name (same as project name itself
+    # auto-fills from the dir); a prior id wins on re-init. Use --no-trundlr to skip.
+    tid_default = (prior.get("trundlr", {}) or {}).get("project_id") or name
+    trundlr_id = ask("trundlr project id", default=tid_default, preset=args.trundlr_project_id)
 
     ctx = {
         "PROJECT": name,
-        "PACKAGE": slugify(package),
-        "DESCRIPTION": description or "(describe during raster plan)",
+        "PACKAGE": package,
+        "BRIEF": brief or "(not provided at init — clarify with the user during planning)",
+        "BRIEF_YAML": json.dumps(brief or "(not provided at init)"),
+        "DESCRIPTION": description or "(to be generated during raster plan)",
         "PYTHON_VERSION": python_version or "3.11",
         "TEST_RUNNER": "pytest",
         "GIT_HOST": cfg.git_host,
@@ -145,7 +183,7 @@ def run_init(args) -> int:
         "TRUNDLR_PROJECT_ID": trundlr_id or "null",
         "GPU": cfg.gpu_resource,
         "CPU": cfg.cpu_resource,
-        "CALE": cfg.cale_resource,
+        "HUMAN": cfg.human_resource,
         "CLAUDE": cfg.claude_resource,
         "STRONG_MODEL": cfg.strong_model,
         "WORKER_MODEL": cfg.worker_model,
@@ -179,15 +217,15 @@ def run_init(args) -> int:
     if not args.no_git:
         setup_git(code, cfg, ctx, create_remote=not args.no_remote)
 
-    # ---- queue the interactive plan task (Cale + Claude) ----
+    # ---- queue the interactive plan task (human + Claude) ----
     if not args.no_trundlr and trundlr_id:
-        resources = [cfg.cale_resource, cfg.claude_resource]
+        resources = [cfg.human_resource, cfg.claude_resource]
         if not any(resources):
-            log("trundlr: cale_resource/claude_resource are 0 in config — "
+            log("trundlr: human_resource/claude_resource are 0 in config — "
                 "skipping plan task (set them to queue it)")
         else:
             try:
-                t = trundlr.queue_plan_task(cfg.trundlr_api, int(trundlr_id),
+                t = trundlr.queue_plan_task(cfg.trundlr_api, trundlr_id,
                                             resources, name)
                 log(f"trundlr: queued plan task #{t.get('id', '?')} "
                     f"(resources {[r for r in resources if r]})")

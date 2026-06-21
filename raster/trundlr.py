@@ -9,6 +9,13 @@ import urllib.error
 import urllib.request
 
 
+def coerce_id(v):
+    """A trundlr project id may be a numeric API id OR a project name (raster defaults
+    it to the project name). Keep an all-digit id as an int; pass a name through as-is."""
+    s = str(v)
+    return int(s) if s.isdigit() else v
+
+
 def _api(api_url: str, method: str, path: str, body=None, timeout: int = 30):
     data = json.dumps(body).encode() if body is not None else None
     req = urllib.request.Request(
@@ -20,7 +27,7 @@ def _api(api_url: str, method: str, path: str, body=None, timeout: int = 30):
         return None if resp.status == 204 else json.loads(resp.read())
 
 
-def set_project_directory(api_url: str, project_id: int, directory: str) -> None:
+def set_project_directory(api_url: str, project_id, directory: str) -> None:
     """Point the trundlr project at the repo root so queued commands run there."""
     _api(api_url, "PATCH", f"/projects/{project_id}", {"project_directory": directory})
 
@@ -30,9 +37,9 @@ def create_task(api_url: str, body: dict) -> dict:
     return _api(api_url, "POST", "/tasks/", body)
 
 
-def queue_plan_task(api_url: str, project_id: int, resource_ids: list[int],
+def queue_plan_task(api_url: str, project_id, resource_ids: list[int],
                     project_name: str) -> dict:
-    """Create the interactive 'plan' task (Cale + Claude) for a project.
+    """Create the interactive 'plan' task (human + Claude) for a project.
 
     The plan step is human+Claude collaborative design-doc authoring, so the task
     is assigned to both resources; its command points at `raster plan` and its
@@ -40,11 +47,11 @@ def queue_plan_task(api_url: str, project_id: int, resource_ids: list[int],
     """
     body = {
         "title": f"raster: plan {project_name}",
-        "description": ("Interactive design-doc authoring (Cale + Claude): complete "
+        "description": ("Interactive design-doc authoring (human + Claude): complete "
                         "code/designdocs/DESIGN.md and tasks.yaml. Playbook: "
                         "code/designdocs/PLANNING.md."),
         "command": "raster plan",
-        "project_id": int(project_id),
+        "project_id": coerce_id(project_id),
         "resource_ids": [r for r in resource_ids if r],
         "status": "todo",
     }
