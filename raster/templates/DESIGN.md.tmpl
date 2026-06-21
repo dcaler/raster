@@ -53,9 +53,10 @@ code/
      and any external assets (data files, models, soundfonts, services). -->
 
 ## 8. Build & orchestration
-<!-- How the build runs: `raster build` linearizes tasks.yaml into a trundlr chain
-     (single-parent depends_on; a failure auto-blocks downstream). Each green
-     task/gate commits code/ and pushes to {{OWNER}}/{{PROJECT}}. Usually leave as-is. -->
+<!-- How the build runs: `raster queue` linearizes tasks.yaml into a trundlr chain
+     (single-parent depends_on; a failure auto-blocks downstream), which runs
+     `raster build` per task and `raster test` per gate. Each green task/gate commits
+     code/ and pushes to {{OWNER}}/{{PROJECT}}. Usually leave as-is. -->
 
 ## 9. Open decisions
 <!-- Anything deliberately deferred. Keep non-blocking choices out of the critical path. -->
