@@ -1,5 +1,4 @@
-"""`raster init` — scaffold a project's code/ tree, its git repo, and design-doc
-stubs, then optionally queue an interactive `plan` task in trundlr.
+"""`raster init` — scaffold a project's code/ tree, its git repo, and design-doc stubs.
 
 Run from the PROJECT ROOT (the shared working dir, alongside any litReview/ or
 paper/). raster scaffolds and works entirely inside code/, never at the root.
@@ -18,7 +17,6 @@ from pathlib import Path
 import yaml
 
 from raster.config import Config, load_config
-from raster import trundlr
 
 
 def log(msg: str) -> None:
@@ -122,9 +120,20 @@ def setup_git(code: Path, cfg: Config, ctx: dict, create_remote: bool) -> None:
               "--source", str(code), "--remote", "origin", "--push"])
     if r.returncode == 0:
         log(f"gh: created {vis.lstrip('-')} repo {slug} and pushed")
+        return
+    err = (r.stderr or r.stdout).strip()
+    if "scope" in err.lower() or "createRepository" in err:
+        hint = ("your gh token lacks the repo-creation scope — run "
+                "`gh auth refresh -s repo` (or `-h github.com -s repo`), then re-run "
+                "`raster init` to create + push the remote")
+    elif "already exists" in err.lower() or "name already" in err.lower():
+        hint = (f"{slug} already exists — add it as a remote: "
+                f"`git -C {code} remote add origin git@{cfg.git_host}:{slug}.git && "
+                f"git -C {code} push -u origin main`")
     else:
-        log(f"gh: repo create failed ({(r.stderr or r.stdout).strip()[:160]}) — "
-            f"repo exists locally; create the remote by hand")
+        hint = f"create {slug} on {cfg.git_host} and add it as origin by hand"
+    log(f"gh: repo create failed — {hint}.")
+    log(f"    (repo exists locally; gh said: {err[:140]})")
 
 
 # ------------------------------------------------------------------- the command
@@ -164,7 +173,8 @@ def run_init(args) -> int:
     if visibility not in ("private", "public"):
         visibility = "private"
     # default the trundlr project id to the project name (same as project name itself
-    # auto-fills from the dir); a prior id wins on re-init. Use --no-trundlr to skip.
+    # auto-fills from the dir); a prior id wins on re-init. Recorded in raster.yaml for
+    # `raster queue` (the build chain) — init does not contact trundlr.
     tid_default = (prior.get("trundlr", {}) or {}).get("project_id") or name
     trundlr_id = ask("trundlr project id", default=tid_default, preset=args.trundlr_project_id)
 
@@ -217,26 +227,14 @@ def run_init(args) -> int:
     if not args.no_git:
         setup_git(code, cfg, ctx, create_remote=not args.no_remote)
 
-    # ---- queue the interactive plan task (human + Claude) ----
-    if not args.no_trundlr and trundlr_id:
-        resources = [cfg.human_resource, cfg.claude_resource]
-        if not any(resources):
-            log("trundlr: human_resource/claude_resource are 0 in config — "
-                "skipping plan task (set them to queue it)")
-        else:
-            try:
-                t = trundlr.queue_plan_task(cfg.trundlr_api, trundlr_id,
-                                            resources, name)
-                log(f"trundlr: queued plan task #{t.get('id', '?')} "
-                    f"(resources {[r for r in resources if r]})")
-            except Exception as e:
-                log(f"trundlr: could not queue plan task ({e!r}) — queue it by hand later")
-    elif not trundlr_id:
-        log("trundlr: no project id — skipped plan task")
+    # The trundlr project id is recorded in raster.yaml for `raster queue` to submit the
+    # BUILD chain later; init no longer queues an interactive plan task (raster plan launches
+    # a Claude session directly, so there's nothing to queue).
 
     log("done.")
     print()
     print(f"  Scaffolded {name} in {code}")
-    print( "  Next:  open a Claude session here and run `raster plan`")
-    print( "         it will read code/designdocs/PLANNING.md and lead the design.")
+    print( "  Next:  run `raster plan` — it launches an interactive Claude session that reads")
+    print( "         code/designdocs/PLANNING.md and leads the design with you.")
+    print( "         (use `raster plan --no-launch` to just print the playbook path instead.)")
     return 0

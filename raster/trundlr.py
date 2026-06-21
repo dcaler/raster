@@ -1,7 +1,7 @@
-"""Minimal trundlr API client — enough for raster to queue a plan task.
+"""Minimal trundlr API client — enough for `raster queue` to submit the build chain.
 
-trundlr is the orchestrator (the same one `raster build` will later submit the
-doer task chain to). Here we only POST a single collaborative "plan" task.
+trundlr is the orchestrator that runs the linearized `raster build`/`raster test`
+tasks. This client sets a project's working directory and creates chained tasks.
 """
 
 import json
@@ -34,25 +34,4 @@ def set_project_directory(api_url: str, project_id, directory: str) -> None:
 
 def create_task(api_url: str, body: dict) -> dict:
     """Create one trundlr task (used by `raster queue` to chain the build)."""
-    return _api(api_url, "POST", "/tasks/", body)
-
-
-def queue_plan_task(api_url: str, project_id, resource_ids: list[int],
-                    project_name: str) -> dict:
-    """Create the interactive 'plan' task (human + Claude) for a project.
-
-    The plan step is human+Claude collaborative design-doc authoring, so the task
-    is assigned to both resources; its command points at `raster plan` and its
-    description at the in-repo planning playbook.
-    """
-    body = {
-        "title": f"raster: plan {project_name}",
-        "description": ("Interactive design-doc authoring (human + Claude): complete "
-                        "code/designdocs/DESIGN.md and tasks.yaml. Playbook: "
-                        "code/designdocs/PLANNING.md."),
-        "command": "raster plan",
-        "project_id": coerce_id(project_id),
-        "resource_ids": [r for r in resource_ids if r],
-        "status": "todo",
-    }
     return _api(api_url, "POST", "/tasks/", body)

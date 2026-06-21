@@ -10,8 +10,8 @@ using local LLM workers via Ollama, orchestrated by trundlr.
 > their output (a `litReview/` review, a `paper/` draft) when planning a build.
 
 ```
-raster init           ▸ scaffold code/, its git repo, design-doc stubs; queue a plan task
-raster plan           ▸ (interactive: you + Claude) author DESIGN.md + tasks.yaml   [next]
+raster init           ▸ scaffold code/, its git repo, design-doc stubs (asks for a build brief)
+raster plan           ▸ launch an interactive Claude session that authors DESIGN.md + tasks.yaml
 raster queue          ▸ linearize tasks.yaml -> submit the trundlr build chain
 raster build <id>     ▸ run one coding task (LLM implements/authors vs the frozen test)
 raster test  <id>     ▸ run a gate or a unit-test assessment (no LLM)
@@ -52,16 +52,18 @@ raster init
 
 `init`:
 
+- asks for the project name and a long-form **build brief** ("what do you want to
+  build today?"), stored in `raster.yaml` for the plan step,
 - scaffolds `code/` (raster works entirely inside it; the root is left alone),
 - writes `code/raster.yaml` (build config, git-ignored) and `code/designdocs/`
   (`DESIGN.md`, `tasks.yaml`, `PROGRESS.md` + a `PLANNING.md` playbook),
 - creates the project's own git repo named after it (`git init` + `gh repo create
-  dcaler/<project>`, visibility asked per init) under the non-PII identity,
-- queues an interactive **plan** task in trundlr assigned to **you + Claude**.
+  dcaler/<project>`, visibility asked per init) under the non-PII identity.
 
-Then open a Claude session in the folder and run `raster plan` — it reads
-`PLANNING.md`, absorbs the project's existing materials, and leads the design
-interactively, producing `DESIGN.md` and `tasks.yaml`.
+Then run `raster plan` — it launches an interactive Claude session in the folder
+that reads `PLANNING.md`, absorbs the brief and the project's existing materials,
+and leads the design with you, producing `DESIGN.md` and `tasks.yaml`. (Use
+`raster plan --no-launch` to just print the playbook path and drive it yourself.)
 
 ### What's committed vs. git-ignored
 
@@ -97,4 +99,5 @@ frozen Phase-0 tests, bounded repair loop that climbs an **escalation ladder**
 (`worker` → `strong` −think → `strong` +think — model *and* reasoning escalate
 together, think-off-first / think-on-retry), commit-and-push on each green
 task/gate). A task's `worker` is its starting tier *and* its floor — assign it by
-cost-of-error (see the planning playbook). `plan` is still an interactive stub.
+cost-of-error (see the planning playbook). `plan` launches an interactive Claude
+session seeded with the planning playbook (or `--no-launch` to drive it by hand).

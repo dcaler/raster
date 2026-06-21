@@ -26,10 +26,11 @@ def build_parser() -> argparse.ArgumentParser:
     init.add_argument("--no-git", action="store_true", help="skip git init/commit")
     init.add_argument("--no-remote", action="store_true",
                       help="git init/commit locally but do NOT create/push the GitHub repo")
-    init.add_argument("--no-trundlr", action="store_true", help="do not queue a plan task")
 
     plan = sub.add_parser("plan", help="(interactive) author DESIGN.md + tasks.yaml")
     _common(plan)
+    plan.add_argument("--no-launch", action="store_true",
+                      help="don't start Claude; just print the planning playbook path")
 
     queue = sub.add_parser("queue", help="linearize tasks.yaml -> submit the trundlr chain")
     _common(queue)

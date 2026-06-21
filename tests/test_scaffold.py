@@ -8,7 +8,7 @@ import yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from raster.cli import build_parser
+from raster.cli import build_parser, main
 from raster.init import project_name_from_dir, run_init, slugify, render
 
 
@@ -19,7 +19,7 @@ def test_init_scaffolds_tree(tmp_path, monkeypatch):
     args = build_parser().parse_args([
         "init", "--dir", str(tmp_path / "proj"),
         "--name", "WidgetForge", "--visibility", "private",
-        "--no-git", "--no-remote", "--no-trundlr",
+        "--no-git", "--no-remote",
     ])
     assert run_init(args) == 0
 
@@ -59,7 +59,7 @@ def test_init_stores_brief_and_feeds_plan(tmp_path, monkeypatch):
     brief = "Build a CLI that converts MIDI to abc notation.\nMust run fully offline."
     run_init(build_parser().parse_args(
         ["init", "--dir", str(proj), "--name", "midi2abc", "--brief", brief,
-         "--no-git", "--no-remote", "--no-trundlr"]))
+         "--no-git", "--no-remote"]))
     code = proj / "code"
     ry = yaml.safe_load((code / "raster.yaml").read_text())
     assert ry["brief"] == brief                                   # multi-line preserved
@@ -72,7 +72,7 @@ def test_init_leaves_description_for_plan(tmp_path, monkeypatch):
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "cfg"))
     proj = tmp_path / "proj"
     run_init(build_parser().parse_args(
-        ["init", "--dir", str(proj), "--name", "P", "--no-git", "--no-remote", "--no-trundlr"]))
+        ["init", "--dir", str(proj), "--name", "P", "--no-git", "--no-remote"]))
     cfg = yaml.safe_load((proj / "code" / "raster.yaml").read_text())
     assert "generated during raster plan" in cfg["description"]
 
@@ -90,15 +90,25 @@ def test_init_default_name_strips_datestamp(tmp_path, monkeypatch):
     monkeypatch.setattr("sys.stdin.isatty", lambda: False)   # non-interactive -> take defaults
     proj = tmp_path / "260618_widgets"
     run_init(build_parser().parse_args(
-        ["init", "--dir", str(proj), "--no-git", "--no-remote", "--no-trundlr"]))
+        ["init", "--dir", str(proj), "--no-git", "--no-remote"]))
     cfg = yaml.safe_load((proj / "code" / "raster.yaml").read_text())
     assert cfg["project"] == "widgets"
+
+
+def test_plan_no_launch_prints_playbook(tmp_path, monkeypatch, capsys):
+    # `raster plan --no-launch` finds the scaffolded playbook and prints it (no Claude launch).
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "cfg"))
+    proj = tmp_path / "proj"
+    run_init(build_parser().parse_args(
+        ["init", "--dir", str(proj), "--name", "P", "--no-git", "--no-remote"]))
+    assert main(["plan", "--dir", str(proj), "--no-launch"]) == 0
+    assert "PLANNING.md" in capsys.readouterr().out
 
 
 def test_protect_keeps_authored_docs(tmp_path, monkeypatch):
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "cfg"))
     base = ["init", "--dir", str(tmp_path / "proj"), "--name", "P",
-            "--no-git", "--no-remote", "--no-trundlr"]
+            "--no-git", "--no-remote"]
     run_init(build_parser().parse_args(base))
 
     design = tmp_path / "proj" / "code" / "designdocs" / "DESIGN.md"
