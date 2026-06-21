@@ -146,6 +146,36 @@ def test_linearize_chain(tmp_path):
     assert [c["title"] for c in chain] == ["raster: P0.M0", "raster: M0.T1", "raster: G0"]
 
 
+def test_linearize_inserts_review_checkpoints(tmp_path):
+    project = make_project(tmp_path)
+    project.cfg.human_resource = 1
+    project.cfg.claude_resource = 4
+    project.spec = {
+        "meta": SPEC["meta"], "execution": SPEC["execution"],
+        "modules": [
+            {"id": "M0", "name": "scaffold",
+             "checkpoint": "Claude — review the frozen suite; go/no-go.",
+             "tasks": [{"id": "M0.T1", "title": "scaffold", "worker": "worker"}],
+             "gate": {"id": "G0", "spec": "imports",
+                      "integration_test": {"file": "tests/g.py", "cmd": "pytest -q"}}},
+        ],
+        "final_checkpoint": "Claude — whole-system sign-off.",
+    }
+    chain = linearize(project, exec_cmd="raster")
+    # a checkpoint is inserted on the edge BEFORE its module, and one final sign-off at the end
+    assert [c["id"] for c in chain] == ["M0", "M0.T1", "G0", "final"]
+    ck = chain[0]
+    assert ck["kind"] == "checkpoint" and ck["command"] is None      # null command => blocks
+    assert ck["resources"] == [1, 4]                                  # [human, claude]
+    assert ck["title"] == "raster: checkpoint M0"
+    assert ck["description"] == "Claude — review the frozen suite; go/no-go."
+    fin = chain[-1]
+    assert fin["command"] is None and fin["resources"] == [1, 4]
+    # with reviewer resources unset, the checkpoint queues reviewer-less (still blocks)
+    project.cfg.human_resource = project.cfg.claude_resource = 0
+    assert linearize(project, exec_cmd="raster")[0]["resources"] == []
+
+
 def test_find_gate_and_task():
     assert find_task(SPEC, "M0.T1")[1]["title"] == "Package scaffold"
     assert find_gate(SPEC, "G0")[1]["id"] == "G0"

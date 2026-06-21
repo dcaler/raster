@@ -80,6 +80,32 @@ in `tasks.yaml`. Rules that make a spec **valid** (get these right or the build 
   not difficulty** (see *Tiering* below).
 - Mirror `runtime_deps` into `meta.runtime_deps`.
 
+### Pin the spec — leave the worker no latitude
+
+A cheap local worker fills **every gap you leave** with its training prior, and turning thinking
+on makes it fill gaps *more confidently*, not more correctly (open latitude × thinking = a
+confident wrong invention; constrained latitude × thinking = a cleaner correct one). Prompt
+quality is just *how little latitude remains*. So when you write each `spec:`/`test_notes` and the
+frozen tests, pin — and assert on — the following (each maps to a real observed failure):
+
+1. **Structure — and what it is NOT.** "A 1D window of beats (a flat list of slots), **not** a 2D
+   grid." Naming the anti-pattern matters as much as naming the target; workers hallucinate the
+   familiar shape from their prior.
+2. **Types and exact field names.** "`Config` is a `@dataclass` with fields `a, b, c`" — never "a
+   config", which becomes a dict with invented fields every time.
+3. **Formulas by name AND definition, with a worked example.** "Jaccard distance `d = 1 − |a∩b|/|a∪b|`,
+   in `[0,1]`, identical→0, disjoint→1." A bare "distance" produces a different wrong metric each run.
+4. **The exact identifier names downstream consumers/guards import.** When names drift, an
+   introspecting guard finds nothing and **passes vacuously**.
+5. **Output shape.** Golden values as importable **module-level constants**, not pytest fixtures
+   (fixtures aren't importable, so they're not machine-checkable).
+6. **File locations.** Exact deliverable paths, or output lands where no downstream test can import it.
+7. **A worked example** wherever a value is independently computable — it gives the worker a self-check.
+
+This is also why Phase-0 authoring is always think-on and `strong`: reasoning helps *only once the
+spec is tight*. Spend the design effort here, at the top of the ladder, so the cheap rungs below
+implement against an oracle that already has no give.
+
 ### Tiering — assign `worker` by cost-of-error floor
 
 The doer escalates cheap→expensive on failure (climbing `meta.ladder`: `worker` → `strong`
@@ -106,6 +132,50 @@ multi-invariant logic (determinism, conservation, ordering) → start `strong` (
 catches regressions the frozen test then verifies); every Phase-0 task and every gate → `strong`.
 
 Keep `PROGRESS.md` in sync with the modules/tasks you create (it's the human status board).
+
+## Step 3b — Add the two review backstops
+
+Pinning the spec lowers the error rate but can't drive it to zero. **The worker authored both the
+data and its own tests, so it cannot be its own checker** — that is exactly why a wrong frozen
+value sails through its own suite. Two residual error classes survive any prompt; each needs a
+*different* backstop, so don't conflate them:
+
+**Layer 1 — automated impl-independent guard** (catches *self-consistent-but-wrong-against-an-oracle*:
+a value the worker got consistently wrong in its own tables, yet wrong against the world). A small
+**Claude-authored** check, co-located with the frozen tests, asserting external ground truth the
+worker can't be trusted on and can't later edit; authored in Phase 0, run from a module **gate**.
+Insert one **iff all three** hold:
+1. **Frozen + high fan-out** — a Phase-0 contract many tasks consume; an error is unfixable by impl
+   (it can't edit a frozen test) and compounds downstream.
+2. **Semantic latitude** — the design left it unpinned, or it's a `worker: strong` task.
+3. **An external oracle exists** — a conservation law, metric axioms, a type/dimension invariant, a
+   domain rule. *No oracle → the check is tautological; don't write it.*
+
+Put the guard under a path **no task lists as a deliverable** (e.g. `tests/golden/test_*_consistency.py`),
+so a freeze re-run can't clobber it, and call it from the relevant gate's `integration_test`.
+
+**Layer 2 — manual review checkpoint** (catches *wrong-against-design-intent, with no mechanical
+oracle*: hacky-but-passing impls, design drift, "satisfies the test's letter, misses its point" —
+no test can encode this; it needs a human looking). Declare it as a module's `checkpoint:` field;
+`raster queue` turns it into a `command: null` trundlr task on the `[human, claude]` resources, on
+the dependency edge **before** that module — it stays `todo` (no runner claims those resources) and
+blocks everything downstream until a human signs off (failing-closed for free). **The description
+IS the prompt**: write the literal instruction you'll hand the reviewer when it surfaces. Place
+checkpoints where the worker has latitude AND tests are blind to intent:
+
+- **The freeze→impl boundary — the single highest-value checkpoint.** Frozen tests are the one
+  artifact impl can't repair; collection passing says nothing about whether the goldens are *right*.
+  Put a `checkpoint:` on the **first implementation module** to review the whole frozen suite once.
+- **The conceptually-hard `worker: strong` modules** — where "passes the test but is substantively
+  wrong" is most likely.
+- **A final whole-system sign-off** — set the top-level `final_checkpoint:` field.
+- **NOT the boilerplate modules** (scaffold, vocab, CLI). Impl there is self-protecting: a wrong impl
+  fails its own frozen gate and breaks the chain. Checkpointing everything just duplicates the gates
+  and throttles the autonomy that is the whole point of the cheap-worker pipeline.
+
+Both layers are **authored once and amortised** across every run/re-run — trigger them at the few
+high-value edges, don't gate every task. (Checkpoints need `human_resource` and `claude_resource`
+set in `~/.config/raster/config.toml`, else `raster queue` warns and queues them reviewer-less.)
 
 ## Step 4 — Write the one-line build description
 

@@ -28,17 +28,46 @@ def _cache_project_id(project, pid: int) -> None:
 
 
 def estimate_hours(kind: str, worker: str) -> float:
-    if kind == "gate":
-        return 0.1
+    if kind in ("gate", "checkpoint"):
+        return 0.1 if kind == "gate" else 1.0   # a manual human+claude review ~1h (and >0, which trundlr requires)
     return 0.5 if worker == "strong" else 0.25
+
+
+def _checkpoint_text(ck) -> str:
+    """A checkpoint may be a bare prompt string or a {prompt/description, title} dict.
+    The description IS the prompt — the literal instruction handed to the reviewer."""
+    if isinstance(ck, dict):
+        return (ck.get("prompt") or ck.get("description") or "").strip()
+    return str(ck).strip()
+
+
+def _checkpoint_item(cid: str, prompt: str, reviewers: list) -> dict:
+    """A Layer-2 review checkpoint: a `command: null` task on the [human, claude]
+    resources, sitting on a dependency edge. No automated runner claims those
+    resources, so it stays `todo` and blocks everything downstream until a human
+    marks it done — failing-closed with no special 'hold' primitive needed."""
+    return {
+        "id": cid,
+        "title": f"raster: checkpoint {cid}",
+        "description": prompt or f"Review checkpoint before {cid} — confirm nothing is haywire; end with go/no-go.",
+        "command": None,                 # null command => no runner claims it => it blocks
+        "resource": None,
+        "resources": reviewers,
+        "kind": "checkpoint",
+        "duration": estimate_hours("checkpoint", ""),
+    }
 
 
 def linearize(project, exec_cmd: str) -> list:
     res = project.execution.get("resources", {}) or {}
     gpu = res.get("gpu", project.cfg.gpu_resource)
     cpu = res.get("cpu", project.cfg.cpu_resource)
+    reviewers = [r for r in (project.cfg.human_resource, project.cfg.claude_resource) if r]
     chain = []
     for m in project.spec.get("modules", []) or []:
+        ck = m.get("checkpoint")
+        if ck:                           # a review BEFORE this module's tasks run
+            chain.append(_checkpoint_item(m["id"], _checkpoint_text(ck), reviewers))
         for t in m.get("tasks", []) or []:
             chain.append({
                 "id": t["id"],
@@ -46,6 +75,7 @@ def linearize(project, exec_cmd: str) -> list:
                 "description": t.get("title", ""),
                 "command": f"{exec_cmd} build {t['id']}",
                 "resource": gpu,
+                "resources": [gpu],
                 "kind": "task",
                 "duration": estimate_hours("task", t.get("worker", "strong")),
             })
@@ -57,9 +87,13 @@ def linearize(project, exec_cmd: str) -> list:
                 "description": f"gate — {m.get('name', '')}",
                 "command": f"{exec_cmd} test {g['id']}",
                 "resource": cpu,
+                "resources": [cpu],
                 "kind": "gate",
                 "duration": estimate_hours("gate", ""),
             })
+    fck = project.spec.get("final_checkpoint")
+    if fck:                              # a whole-system sign-off after the last module
+        chain.append(_checkpoint_item("final", _checkpoint_text(fck), reviewers))
     return chain
 
 
@@ -71,13 +105,23 @@ def run_queue(args) -> int:
         print("[raster queue] tasks.yaml has no modules yet — run `raster plan` first.")
         return 1
 
+    checkpoints = [c for c in chain if c["kind"] == "checkpoint"]
+    if checkpoints and not (project.cfg.human_resource and project.cfg.claude_resource):
+        print("[raster queue] WARNING: this spec declares review checkpoints, but "
+              "human_resource/claude_resource are unset in ~/.config/raster/config.toml.\n"
+              "  Checkpoints will be queued with no reviewer resources — they still block "
+              "downstream, but won't show up as anyone's task. Set both to fix.")
+
     if args.dry_run:
         total = sum(c["duration"] for c in chain)
-        print(f"{len(chain)} tasks (~{total:.2f}h), exec_cmd={exec_cmd!r}:\n")
+        print(f"{len(chain)} tasks ({len(checkpoints)} checkpoint(s), ~{total:.2f}h), "
+              f"exec_cmd={exec_cmd!r}:\n")
         for i, c in enumerate(chain):
             dep = chain[i - 1]["id"] if i else "—"
-            print(f"  {c['title']:24} res={c['resource']}  {c['duration']:.2f}h  "
-                  f"dep={dep:10}  [{c['command']}]")
+            resv = ",".join(map(str, c.get("resources") or [])) or "—"
+            cmd = c["command"] or "MANUAL REVIEW (human+claude) — blocks until signed off"
+            print(f"  {c['title']:26} res={resv:5}  {c['duration']:.2f}h  "
+                  f"dep={dep:10}  [{cmd}]")
         return 0
 
     pid_raw = project.trundlr_project_id()
@@ -114,9 +158,9 @@ def run_queue(args) -> int:
             created = trundlr.create_task(api, {
                 "title": c["title"],
                 "description": c["description"],
-                "command": c["command"],
+                "command": c["command"],          # null for checkpoints => no runner claims it
                 "project_id": pid,
-                "resource_ids": [c["resource"]],
+                "resource_ids": c.get("resources") or [c["resource"]],
                 "depends_on_id": prev_id,
                 "duration": c["duration"],
                 "status": "todo",

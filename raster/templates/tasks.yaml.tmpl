@@ -13,7 +13,8 @@
 # then writes IMPLEMENTATION ONLY for M* tasks and never creates/edits anything under tests/.
 #
 # Per-task contract:   {id, title, worker, depends_on, deliverables, spec, unit_test:{file,cmd}}
-# Per-module contract: {id, name, worker, tasks:[...], gate:{id, integration_test:{file,cmd}, spec}}
+# Per-module contract: {id, name, worker, tasks:[...], gate:{id, integration_test:{file,cmd}, spec},
+#                       checkpoint?: <review prompt>}
 #
 # worker = a task's STARTING tier on meta.ladder (mapped to a model via meta.workers).
 # Because escalation only climbs the ladder (never down), a task's start tier is also its
@@ -21,6 +22,25 @@
 # and irreversible -> floor it at `strong`; a loud/oracled/reversible mistake is cheap to
 # repair -> start it at `worker` and let failure escalate it. All Phase-0 (P0.*) authoring
 # is `strong` and always runs think-on regardless of the ladder (no oracle to repair against).
+#
+# TWO REVIEW BACKSTOPS for what the prompt + frozen tests can't catch (the worker authored
+# both the data AND its own tests, so it cannot be its own checker):
+#   * Layer 1 — automated impl-independent GUARD: a Claude-authored check co-located with the
+#     frozen tests (e.g. tests/golden/test_*_consistency.py) that asserts an EXTERNAL oracle the
+#     worker can't be trusted on (a conservation law, a type/dimension invariant, a domain rule).
+#     Author it in Phase 0; run it from a module GATE. Put it under a path NO task lists as a
+#     deliverable, so a freeze re-run can't clobber it. Insert one IFF all three hold: frozen +
+#     high fan-out, semantic latitude, AND an external oracle actually exists (no oracle -> the
+#     check is tautological; don't write it).
+#   * Layer 2 — manual review CHECKPOINT: `checkpoint:` on a module (below). `raster queue` turns
+#     it into a `command: null` trundlr task on the [human, claude] resources, on the dependency
+#     edge BEFORE that module — it stays `todo` (no runner claims those resources) and blocks
+#     everything downstream until a human signs off. The description IS the prompt: write the
+#     literal instruction you'll hand the reviewer ("review X; check 1/2/3; flag file:line; end
+#     with go/no-go"). Place checkpoints where the worker has latitude AND tests are blind to
+#     intent: the freeze->impl boundary (highest value), the conceptually-hard `strong` modules,
+#     and a final whole-system sign-off (top-level `final_checkpoint:`). NOT the boilerplate
+#     modules — impl there is self-protecting (a wrong impl fails its own frozen gate).
 
 orchestration:
   task:    {advance_on: unit_test_pass, on_fail: block_next_task}
@@ -92,6 +112,14 @@ modules: []
 #   - id: M0
 #     name: scaffold
 #     worker: worker
+#     # The single highest-value checkpoint: review the WHOLE frozen suite once, before any
+#     # code builds on it (collection passing says nothing about whether the goldens are RIGHT).
+#     checkpoint: >
+#       Claude — review the entire frozen Phase-0 suite before any implementation starts.
+#       Check: (1) golden values are internally consistent and match design intent;
+#       (2) the model shape matches DESIGN.md (not a hallucinated alternative);
+#       (3) every downstream-consumed identifier/constant is named as the guards expect.
+#       Flag issues as file:line; end with a go/no-go.
 #     tasks:
 #       - id: M0.T1
 #         title: Package scaffold + import smoke
@@ -104,3 +132,8 @@ modules: []
 #       id: G0
 #       spec: "Package imports and exposes its public surface."
 #       integration_test: {file: tests/gate_scaffold.py, cmd: pytest -q tests/gate_scaffold.py}
+#
+# # Optional whole-system sign-off after the last module (a [human, claude] null-command task):
+# final_checkpoint: >
+#   Claude — run the whole system end-to-end and confirm nothing drifted across modules.
+#   Spot-check that each module still honours its gate's intent (not just its letter). Go/no-go.
