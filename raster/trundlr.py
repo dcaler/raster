@@ -16,20 +16,56 @@ def coerce_id(v):
     return int(s) if s.isdigit() else v
 
 
+class TrundlrError(RuntimeError):
+    """An API call failed; carries the server's response body (the 422 validation
+    detail is far more useful than a bare 'Unprocessable Entity')."""
+
+
 def _api(api_url: str, method: str, path: str, body=None, timeout: int = 30):
+    url = f"{api_url.rstrip('/')}/api{path}"
     data = json.dumps(body).encode() if body is not None else None
     req = urllib.request.Request(
-        f"{api_url.rstrip('/')}/api{path}",
-        data=data, method=method,
+        url, data=data, method=method,
         headers={"Content-Type": "application/json", "Accept": "application/json"},
     )
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
-        return None if resp.status == 204 else json.loads(resp.read())
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return None if resp.status == 204 else json.loads(resp.read())
+    except urllib.error.HTTPError as e:
+        detail = (e.read() or b"").decode(errors="replace").strip()
+        raise TrundlrError(f"{method} {url} -> HTTP {e.code} {e.reason}"
+                           + (f"\n    {detail}" if detail else "")) from None
 
 
-def set_project_directory(api_url: str, project_id, directory: str) -> None:
-    """Point the trundlr project at the repo root so queued commands run there."""
-    _api(api_url, "PATCH", f"/projects/{project_id}", {"project_directory": directory})
+def set_project_directory(api_url: str, project_id: int, directory: str) -> None:
+    """Point the trundlr project at the repo root (its `folder`) so queued commands run there."""
+    _api(api_url, "PATCH", f"/projects/{project_id}", {"folder": directory})
+
+
+def list_projects(api_url: str) -> list:
+    return _api(api_url, "GET", "/projects/") or []
+
+
+def create_project(api_url: str, name: str, folder: str = None, description: str = None) -> dict:
+    body = {"name": name, "priority": 1}
+    if folder:
+        body["folder"] = folder
+    if description:
+        body["description"] = description
+    return _api(api_url, "POST", "/projects/", body)
+
+
+def resolve_project_id(api_url: str, name: str, folder: str = None,
+                       description: str = None, create: bool = True):
+    """Resolve a project NAME to trundlr's numeric id (trundlr keys projects by int id).
+    Returns (id, created). Matches an existing project by exact name; creates one if absent
+    and create=True, else returns (None, False)."""
+    for p in list_projects(api_url):
+        if p.get("name") == name:
+            return int(p["id"]), False
+    if not create:
+        return None, False
+    return int(create_project(api_url, name, folder, description)["id"]), True
 
 
 def create_task(api_url: str, body: dict) -> dict:

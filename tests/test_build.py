@@ -142,12 +142,45 @@ def test_linearize_chain(tmp_path):
     assert [c["id"] for c in chain] == ["P0.M0", "M0.T1", "G0"]
     assert chain[0]["command"] == "raster build P0.M0" and chain[0]["resource"] == 2
     assert chain[2]["command"] == "raster test G0" and chain[2]["resource"] == 3  # gate -> cpu
+    # titles use the `raster:` prefix (not the project name) — the trundlr project groups them
+    assert [c["title"] for c in chain] == ["raster: P0.M0", "raster: M0.T1", "raster: G0"]
 
 
 def test_find_gate_and_task():
     assert find_task(SPEC, "M0.T1")[1]["title"] == "Package scaffold"
     assert find_gate(SPEC, "G0")[1]["id"] == "G0"
     assert find_task(SPEC, "nope") == (None, None)
+
+
+# ---------------------------------------------------- trundlr project name -> id
+def test_resolve_project_id_finds_then_creates(monkeypatch):
+    from raster import trundlr
+    posted = []
+
+    def fake_api(api, method, path, body=None, timeout=30):
+        if method == "GET" and path == "/projects/":
+            return [{"id": 7, "name": "existing"}, {"id": 9, "name": "other"}]
+        if method == "POST" and path == "/projects/":
+            posted.append(body)
+            return {"id": 42, "name": body["name"]}
+        raise AssertionError((method, path))
+
+    monkeypatch.setattr(trundlr, "_api", fake_api)
+    assert trundlr.resolve_project_id("http://x", "existing") == (7, False)   # matched, no create
+    assert trundlr.resolve_project_id("http://x", "brandnew", folder="/r") == (42, True)
+    assert posted == [{"name": "brandnew", "priority": 1, "folder": "/r"}]
+    assert trundlr.resolve_project_id("http://x", "missing", create=False) == (None, False)
+
+
+def test_cache_project_id_rewrites_value_keeps_comment(tmp_path):
+    from raster.queue import _cache_project_id
+    project = make_project(tmp_path)
+    ry = project.code / "raster.yaml"
+    ry.write_text("trundlr:\n  project_id: my demo   # set by init\n  api_url: http://x\n")
+    _cache_project_id(project, 42)
+    out = ry.read_text()
+    assert "  project_id: 42   # set by init\n" in out   # value replaced, comment + spacing kept
+    assert "api_url: http://x" in out                    # other lines untouched
 
 
 # ------------------------------------------------------------------- CLI dry-runs
