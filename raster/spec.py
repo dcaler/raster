@@ -59,6 +59,29 @@ class Project:
     def strong_model(self) -> str:
         return (self.meta.get("workers", {}) or {}).get("strong", self.cfg.strong_model)
 
+    def ladder(self) -> list:
+        """The ordered escalation ladder: a list of {worker, think} rungs that
+        `raster build` climbs on repeated failure. A task starts on the rung
+        matching its `worker` and climbs upward only — so a task's start tier is
+        also its floor (it never escalates *down* to something cheaper). The
+        default encodes worker→strong plus think-off-first / think-on-retry."""
+        raw = self.meta.get("ladder")
+        if not raw:
+            return [dict(r) for r in DEFAULT_LADDER]
+        return [{"worker": r.get("worker", "strong"), "think": bool(r.get("think", False))}
+                for r in raw]
+
+
+# Default escalation ladder (the doc's `[llama, qwen−think, qwen+think]`, generalized):
+# cheapest worker first, then the strong model with reasoning off, then strong + reasoning
+# on. Climbing flips BOTH the model and `think`, so reasoning is spent only where the cheap
+# rungs have already failed against the frozen oracle.
+DEFAULT_LADDER = [
+    {"worker": "worker", "think": False},
+    {"worker": "strong", "think": False},
+    {"worker": "strong", "think": True},
+]
+
 
 def load_project(dir_arg=None) -> Project:
     root = Path(dir_arg).resolve() if dir_arg else Path.cwd()

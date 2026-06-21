@@ -93,5 +93,8 @@ raster test  M2.T1              # re-run one task's unit test (assessment only)
 ## Status
 
 `init`, `queue`, `build`, and `test` are implemented (the generalized "doer":
-frozen Phase-0 tests, bounded repair loop with worker→strong escalation,
-commit-and-push on each green task/gate). `plan` is still an interactive stub.
+frozen Phase-0 tests, bounded repair loop that climbs an **escalation ladder**
+(`worker` → `strong` −think → `strong` +think — model *and* reasoning escalate
+together, think-off-first / think-on-retry), commit-and-push on each green
+task/gate). A task's `worker` is its starting tier *and* its floor — assign it by
+cost-of-error (see the planning playbook). `plan` is still an interactive stub.

@@ -15,8 +15,40 @@ from raster.runlog import fmt_secs, log
 from raster.spec import find_task, load_project
 
 MAX_ATTEMPTS = int(os.environ.get("RASTER_MAX_ATTEMPTS", 4))
-ESCALATE_AFTER = int(os.environ.get("RASTER_ESCALATE_AFTER", 2))   # worker -> strong
+ESCALATE_AFTER = int(os.environ.get("RASTER_ESCALATE_AFTER", 2))   # attempts per rung before climbing
 MAX_OUTPUT_CHARS = 6000                                            # of test output fed back
+
+
+def start_index(ladder: list, worker_key: str) -> int:
+    """Where on the ladder a task begins = the first rung matching its `worker`.
+    This is also its floor: escalation only climbs from here, never below."""
+    for i, rung in enumerate(ladder):
+        if rung["worker"] == worker_key:
+            return i
+    return 0
+
+
+def rung_index(start: int, attempt: int, escalate_after: int, n: int) -> int:
+    """Spend `escalate_after` attempts on the start rung, then climb one rung per
+    further attempt (capped at the top). Turns the binary worker->strong jump into
+    a graceful walk up an arbitrarily long ladder."""
+    return min(start + max(0, attempt - escalate_after), n - 1)
+
+
+def resolve_rung(ladder: list, idx: int, task: dict, authoring: bool, meta: dict):
+    """Resolve a rung to (worker_key, think). `think` precedence: a per-task `think`
+    pin wins; else P0 authoring is ALWAYS think-on (no oracle to repair against, so
+    never gamble reasoning off there); else a global `meta.think` pin; else the rung."""
+    worker_key = ladder[idx]["worker"]
+    if "think" in task:
+        think = bool(task["think"])
+    elif authoring:
+        think = True
+    elif meta.get("think") is not None:
+        think = bool(meta["think"])
+    else:
+        think = ladder[idx]["think"]
+    return worker_key, think
 
 
 def run_build(args) -> int:
@@ -27,9 +59,8 @@ def run_build(args) -> int:
         return 1
 
     authoring = args.task.startswith("P0")
-    think = task.get("think", project.meta.get("think"))
-    base_model = task.get("worker", "strong")
-    model = project.model_for(base_model)
+    ladder = project.ladder()
+    start = start_index(ladder, task.get("worker", "strong"))
     unit_cmd = execlib.normalize_pytest_cmd(task["unit_test"]["cmd"])
 
     prompt = execlib.build_prompt(project, module, task, authoring)
@@ -39,18 +70,22 @@ def run_build(args) -> int:
 
     max_attempts = args.max_attempts or MAX_ATTEMPTS
     host = project.ollama_host()
+    start_key, _ = resolve_rung(ladder, start, task, authoring, project.meta)
     log(f"START build={args.task} ({task['title']}) — "
-        f"mode={'AUTHOR tests' if authoring else 'IMPLEMENT'}, model={model}, "
-        f"max_attempts={max_attempts}")
+        f"mode={'AUTHOR tests' if authoring else 'IMPLEMENT'}, "
+        f"start_rung={start + 1}/{len(ladder)} ({start_key}), max_attempts={max_attempts}")
     log(f"  ollama={host}  test_cmd={unit_cmd!r}  cwd={project.code}")
     messages = [{"role": "user", "content": prompt}]
 
     for attempt in range(1, max_attempts + 1):
-        active = model
-        if base_model == "worker" and attempt > ESCALATE_AFTER:
-            active = project.strong_model()
-            log(f"attempt {attempt}/{max_attempts}: escalating worker -> {active}")
-        log(f"=== attempt {attempt}/{max_attempts} (model={active}) ===")
+        idx = rung_index(start, attempt, ESCALATE_AFTER, len(ladder))
+        worker_key, think = resolve_rung(ladder, idx, task, authoring, project.meta)
+        active = project.model_for(worker_key)
+        rung = f"rung {idx + 1}/{len(ladder)} {worker_key} think={think}, model={active}"
+        if idx > start:
+            log(f"=== attempt {attempt}/{max_attempts}: escalated to {rung} ===")
+        else:
+            log(f"=== attempt {attempt}/{max_attempts} ({rung}) ===")
 
         reply = ollama.chat(host, active, messages, label=f"{args.task} a{attempt}", think=think)
         files = execlib.parse_files(reply)

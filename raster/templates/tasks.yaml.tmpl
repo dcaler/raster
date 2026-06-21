@@ -14,7 +14,13 @@
 #
 # Per-task contract:   {id, title, worker, depends_on, deliverables, spec, unit_test:{file,cmd}}
 # Per-module contract: {id, name, worker, tasks:[...], gate:{id, integration_test:{file,cmd}, spec}}
-# worker is "strong" or "worker" (mapped to the models in meta.workers).
+#
+# worker = a task's STARTING tier on meta.ladder (mapped to a model via meta.workers).
+# Because escalation only climbs the ladder (never down), a task's start tier is also its
+# FLOOR. Assign it by COST-OF-ERROR, not difficulty: a wrong frozen golden value is silent
+# and irreversible -> floor it at `strong`; a loud/oracled/reversible mistake is cheap to
+# repair -> start it at `worker` and let failure escalate it. All Phase-0 (P0.*) authoring
+# is `strong` and always runs think-on regardless of the ladder (no oracle to repair against).
 
 orchestration:
   task:    {advance_on: unit_test_pass, on_fail: block_next_task}
@@ -27,10 +33,20 @@ meta:
   package: {{PACKAGE}}
   root: code/
   trundlr_project_id: {{TRUNDLR_PROJECT_ID}}
-  think: false                    # ollama reasoning off (slow local models; little payoff)
+  # think: false                  # OPTIONAL global pin for ollama reasoning. Leave unset so
+                                  # the ladder governs `think` (think-off-first / think-on-retry).
+                                  # Set it to force reasoning off/on everywhere (escape hatch).
   workers:
     strong: {{STRONG_MODEL}}
     worker: {{WORKER_MODEL}}
+  # Escalation ladder: ordered {worker, think} rungs that `raster build` climbs on repeated
+  # failure (RASTER_ESCALATE_AFTER attempts per rung). A task starts on the rung matching its
+  # `worker` and climbs upward only. Climbing flips BOTH the model and reasoning, so `think` is
+  # spent only after the cheap rungs have failed the frozen test. Omit to use this default:
+  ladder:
+    - {worker: worker, think: false}   # cheapest: boilerplate against a correct oracle
+    - {worker: strong, think: false}   # strong model, reasoning off (think-off first)
+    - {worker: strong, think: true}    # strong + reasoning (think-on on retry, CoT's payoff)
   python: "{{PYTHON_VERSION}}"
   runtime_deps: []                # FILL during plan — runtime imports the build needs
   test_deps: [pytest]

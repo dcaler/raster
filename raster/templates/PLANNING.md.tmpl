@@ -65,8 +65,34 @@ in `tasks.yaml`. Rules that make a spec **valid** (get these right or the build 
 - **`depends_on`** encodes the DAG; `raster build` linearizes it into a single-parent
   trundlr chain, so a failure auto-blocks everything downstream. Order tasks so each
   depends on what it actually needs.
-- **worker** = `strong` (tricky logic, all Phase-0, gates) or `worker` (boilerplate).
+- **worker** = each task's STARTING tier on `meta.ladder`. Assign it by **cost-of-error,
+  not difficulty** (see *Tiering* below).
 - Mirror `runtime_deps` into `meta.runtime_deps`.
+
+### Tiering — assign `worker` by cost-of-error floor
+
+The doer escalates cheap→expensive on failure (climbing `meta.ladder`: `worker` → `strong`
+−think → `strong` +think), with a failed top rung blocking downstream (escalate-on-fail, not
+block-on-fail). So you are choosing each task's **floor**, not its ceiling — failure raises the
+tier automatically. Three principles:
+
+1. **Floor by cost-of-error, not difficulty.** A wrong **frozen golden value** is *silent*
+   (no test can see wrong intent) and *irreversible* (impl tasks can't edit `tests/`) → it must
+   never start cheap: floor it at `strong`. A wrong **CLI flag** is *loud* (the test fails) and
+   *cheap* (the repair loop fixes it) → start it at `worker`. Difficulty barely matters when a
+   tight frozen oracle catches the error.
+2. **Spend the top tier UPSTREAM, on the frozen spec.** "Cheap workers implement against frozen
+   tests" only pays off if the tests are correct. All of **Phase 0** is `strong` — the golden
+   values *are* the design intent, and reasoning can't supply grounding the spec never pinned.
+   Get the oracle right once at the top of the ladder; then the cheap tiers implement against it.
+3. **Reasoning amplifies whatever latitude the spec gives.** Tight `spec:` + think → better
+   compliance; loose `spec:` + think → more elaborate *divergence* (it rationalises a
+   plausible-but-wrong invention). So pin interfaces precisely in `spec:`/`test_notes` — that is
+   what makes the think-on rung help rather than hurt. Phase-0 authoring is always think-on.
+
+Concretely: pure transcription / scaffold / argparse / demo config → start `worker`;
+multi-invariant logic (determinism, conservation, ordering) → start `strong` (think-on rung
+catches regressions the frozen test then verifies); every Phase-0 task and every gate → `strong`.
 
 Keep `PROGRESS.md` in sync with the modules/tasks you create (it's the human status board).
 

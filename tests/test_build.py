@@ -10,10 +10,11 @@ import yaml
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from raster import execlib
+from raster.build import resolve_rung, rung_index, start_index
 from raster.config import Config
 from raster.cli import main
 from raster.queue import linearize
-from raster.spec import Project, find_gate, find_task
+from raster.spec import DEFAULT_LADDER, Project, find_gate, find_task
 
 SPEC = {
     "meta": {"package": "pkg", "project": "P",
@@ -94,6 +95,44 @@ def test_build_prompt_authoring_lists_behaviors(tmp_path):
     assert "AUTHORING FROZEN TESTS" in prompt
     assert "Behaviors to cover (module M0)" in prompt and "M0.T1" in prompt
     assert "Module gate to author (G0)" in prompt
+
+
+# ------------------------------------------------------------- escalation ladder
+def test_ladder_resolves_default_and_custom(tmp_path):
+    project = make_project(tmp_path)
+    assert project.ladder() == DEFAULT_LADDER                 # SPEC has no meta.ladder
+    project.spec = {**SPEC, "meta": {**SPEC["meta"],
+                    "ladder": [{"worker": "worker"}, {"worker": "strong", "think": True}]}}
+    assert project.ladder() == [{"worker": "worker", "think": False},
+                                {"worker": "strong", "think": True}]
+
+
+def test_start_index_is_the_floor():
+    ladder = DEFAULT_LADDER
+    assert start_index(ladder, "worker") == 0                 # cheap task starts at the bottom
+    assert start_index(ladder, "strong") == 1                 # strong task floors above `worker`
+    assert start_index(ladder, "mystery") == 0                # unknown -> bottom
+
+
+def test_rung_index_dwells_then_climbs():
+    # escalate_after=2, 3-rung ladder, starting at rung 0: dwell 2 attempts, then climb one/attempt
+    seq = [rung_index(0, a, 2, 3) for a in range(1, 6)]
+    assert seq == [0, 0, 1, 2, 2]                             # capped at the top rung
+    # a strong-start task (start=1) reaches the think-on rung on the first escalation
+    assert [rung_index(1, a, 2, 3) for a in range(1, 5)] == [1, 1, 2, 2]
+
+
+def test_resolve_rung_think_precedence():
+    ladder = DEFAULT_LADDER
+    # implementation, no pins -> rung's own think (off at the bottom, on at the top)
+    assert resolve_rung(ladder, 0, {"worker": "worker"}, False, {}) == ("worker", False)
+    assert resolve_rung(ladder, 2, {"worker": "strong"}, False, {}) == ("strong", True)
+    # P0 authoring is ALWAYS think-on, even on a think-off rung
+    assert resolve_rung(ladder, 1, {"worker": "strong"}, True, {}) == ("strong", True)
+    # a per-task think pin wins over both the rung and the authoring default
+    assert resolve_rung(ladder, 2, {"worker": "strong", "think": False}, True, {}) == ("strong", False)
+    # a global meta.think pin overrides the rung for implementation tasks
+    assert resolve_rung(ladder, 2, {"worker": "strong"}, False, {"think": False}) == ("strong", False)
 
 
 # ------------------------------------------------------------------- queue / find
