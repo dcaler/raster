@@ -10,6 +10,7 @@ import os
 import re
 
 from raster import trundlr
+from raster.build import resolve_rung, start_index
 from raster.spec import load_project
 
 
@@ -27,10 +28,53 @@ def _cache_project_id(project, pid: int) -> None:
         print(f"[raster queue] cached project id {pid} in code/raster.yaml")
 
 
-def estimate_hours(kind: str, worker: str) -> float:
-    if kind in ("gate", "checkpoint"):
-        return 0.1 if kind == "gate" else 1.0   # a manual human+claude review ~1h (and >0, which trundlr requires)
-    return 0.5 if worker == "strong" else 0.25
+# Static run-time priors (hours) per (tier, think). One measured point —
+# strong+think ≈ 1.75h (postIneq P0 authoring) — the rest are estimates, used only
+# until `recent_run_hours` has real history of similar runs to replace them.
+_RUN_HOURS = {
+    ("worker", False): 0.25,
+    ("worker", True):  0.5,
+    ("strong", False): 0.5,
+    ("strong", True):  1.75,
+}
+
+
+def recent_run_hours(worker: str, think: bool, history=None):
+    """Median wall-clock of recent SIMILAR runs (same tier + think), or None when we
+    have no history yet — the caller then falls back to the static prior. `history`
+    is an iterable of {worker, think, hours} records (eventually harvested from
+    trundlr's completed `raster:` tasks); None/empty means 'no data yet'."""
+    samples = sorted(h["hours"] for h in (history or [])
+                     if h.get("worker") == worker and bool(h.get("think")) == bool(think))
+    return samples[len(samples) // 2] if samples else None
+
+
+def estimate_hours(kind: str, worker: str, *, think: bool = False,
+                   escalates: bool = False, history=None) -> float:
+    if kind == "gate":
+        return 0.1
+    if kind == "checkpoint":
+        return 1.0    # a manual human+claude review ~1h (and >0, which trundlr requires)
+    # A strong-floored task starts think-OFF but is one climb from the think-on rung,
+    # and the hard ones land there — so reserve it at the think-on cost up front.
+    reasoning = bool(think or escalates)
+    observed = recent_run_hours(worker, reasoning, history)
+    if observed is not None:
+        return observed
+    return _RUN_HOURS.get((worker, reasoning), _RUN_HOURS[("strong", reasoning)])
+
+
+def _think_budget(project, task: dict, authoring: bool):
+    """(think_at_start, escalates_into_think) for a coding task. think_at_start: does
+    the task's START rung reason (P0 authoring, a meta/per-task pin, or a think-on
+    floor)? escalates_into_think: a think-OFF start whose very next rung flips think
+    ON — one climb away (strong-floored impl), the case we budget at the think-on cost."""
+    ladder = project.ladder()
+    start = start_index(ladder, task.get("worker", "strong"))
+    _, think_start = resolve_rung(ladder, start, task, authoring, project.meta)
+    nxt = ladder[min(start + 1, len(ladder) - 1)]
+    escalates = (not think_start) and bool(nxt["think"])
+    return think_start, escalates
 
 
 def _checkpoint_text(ck) -> str:
@@ -69,6 +113,8 @@ def linearize(project, exec_cmd: str) -> list:
         if ck:                           # a review BEFORE this module's tasks run
             chain.append(_checkpoint_item(m["id"], _checkpoint_text(ck), reviewers))
         for t in m.get("tasks", []) or []:
+            authoring = str(t.get("id", "")).startswith("P0")
+            think_start, escalates = _think_budget(project, t, authoring)
             chain.append({
                 "id": t["id"],
                 "title": f"raster: {t['id']}",
@@ -77,7 +123,8 @@ def linearize(project, exec_cmd: str) -> list:
                 "resource": gpu,
                 "resources": [gpu],
                 "kind": "task",
-                "duration": estimate_hours("task", t.get("worker", "strong")),
+                "duration": estimate_hours("task", t.get("worker", "strong"),
+                                           think=think_start, escalates=escalates),
             })
         g = m.get("gate")
         if g:

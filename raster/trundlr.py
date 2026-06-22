@@ -71,3 +71,8 @@ def resolve_project_id(api_url: str, name: str, folder: str = None,
 def create_task(api_url: str, body: dict) -> dict:
     """Create one trundlr task (used by `raster queue` to chain the build)."""
     return _api(api_url, "POST", "/tasks/", body)
+
+
+def update_task(api_url: str, task_id: int, body: dict) -> dict:
+    """PATCH one existing trundlr task (e.g. re-budget its `duration`)."""
+    return _api(api_url, "PATCH", f"/tasks/{task_id}", body)

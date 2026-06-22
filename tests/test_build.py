@@ -176,6 +176,34 @@ def test_linearize_inserts_review_checkpoints(tmp_path):
     assert linearize(project, exec_cmd="raster")[0]["resources"] == []
 
 
+def test_estimate_hours_think_and_history():
+    from raster.queue import estimate_hours
+    # gates and checkpoints are flat (and a checkpoint must stay > 0 for trundlr)
+    assert estimate_hours("gate", "") == 0.1
+    assert estimate_hours("checkpoint", "") == 1.0
+    # think flips a strong task from the cheap prior to the measured think-on cost
+    assert estimate_hours("task", "strong", think=False) == 0.5
+    assert estimate_hours("task", "strong", think=True) == 1.75
+    # a think-OFF strong floor still reserves at think-on — it is one climb away
+    assert estimate_hours("task", "strong", escalates=True) == 1.75
+    # a worker-floored task stays cheap; it is not reserved for a climb
+    assert estimate_hours("task", "worker") == 0.25
+    # recent SIMILAR runs override the prior; no history yet -> fall back to the prior
+    hist = [{"worker": "strong", "think": True, "hours": 1.0},
+            {"worker": "strong", "think": True, "hours": 3.0},
+            {"worker": "worker", "think": True, "hours": 9.0}]   # different tier, ignored
+    assert estimate_hours("task", "strong", think=True, history=hist) == 3.0  # median of [1,3]
+    assert estimate_hours("task", "strong", think=True, history=[]) == 1.75
+
+
+def test_linearize_budgets_think_on_tasks(tmp_path):
+    project = make_project(tmp_path)
+    chain = {c["id"]: c for c in linearize(project, exec_cmd="raster")}
+    assert chain["P0.M0"]["duration"] == 1.75   # P0 authoring is always think-on
+    assert chain["M0.T1"]["duration"] == 0.25   # worker-floored impl stays cheap
+    assert chain["G0"]["duration"] == 0.1
+
+
 def test_find_gate_and_task():
     assert find_task(SPEC, "M0.T1")[1]["title"] == "Package scaffold"
     assert find_gate(SPEC, "G0")[1]["id"] == "G0"
