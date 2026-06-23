@@ -8,6 +8,8 @@ this in the freeze gate so the scarce human checkpoint spends itself only on val
 intent-correctness (which no linter can promote).
 
 Checks (each maps to an observed defect class):
+  * spec validity (lint_spec) — a tasks.yaml defect that's statically unsatisfiable, e.g. an
+    IMPLEMENT task listing a frozen tests/ path as a deliverable (write_files refuses it).
   * golden-key resolvability  — a literal subscript NAME["lit"] into a golden dict whose
     literal keys we can see must have "lit" among them (caught a note-name vs Roman schism).
   * fixture resolvability     — every fixture a test/fixture requests is defined somewhere
@@ -18,7 +20,7 @@ Checks (each maps to an observed defect class):
 
 import ast
 
-from raster.spec import load_project
+from raster.spec import lint_spec, load_project
 
 # pytest's built-in fixtures — requested but never user-defined.
 PYTEST_BUILTIN_FIXTURES = {
@@ -180,7 +182,7 @@ def lint_frozen_tests(code, package: str) -> list:
 
 def run_lint(args) -> int:
     project = load_project(args.dir)
-    violations = lint_frozen_tests(project.code, project.package)
+    violations = lint_spec(project.spec) + lint_frozen_tests(project.code, project.package)
     if not violations:
         print("[raster lint] frozen-test cross-reference: clean")
         return 0

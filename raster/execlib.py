@@ -20,13 +20,17 @@ TEST_TIMEOUT = int(os.environ.get("RASTER_TEST_TIMEOUT", 600))
 GIT_PUSH = os.environ.get("RASTER_GIT_PUSH", "1") not in ("0", "false", "no", "")
 
 
-def output_contract(pkg: str) -> str:
+def output_contract(pkg: str, root: str = "code") -> str:
     example = f"{pkg}/example.py" if pkg else "example.py"
+    bad = f"{root}/{example}"
+    toml_bad = f"{root}/pyproject.toml"
     return ("Output ONLY files, each wrapped EXACTLY like this (no prose, no markdown fences):\n\n"
             f"=== FILE: {example} ===\n"
             "<full file contents>\n"
             "=== END FILE ===\n\n"
-            "Emit every file in full (not a diff). Paths are relative to the `code/` directory.")
+            "Emit every file in full (not a diff). Emit each path RELATIVE TO the "
+            f"`{root}/` root — do NOT prefix paths with `{root}/`. "
+            f"Write `{example}`, not `{bad}`; write `pyproject.toml`, not `{toml_bad}`.")
 
 
 def parse_files(text: str) -> dict:
@@ -58,8 +62,16 @@ def write_files(project: Project, files: dict, allow_tests: bool,
       full and silently wipe an earlier run's fixtures (last-writer-wins)."""
     written = []
     code = project.code
+    root_prefix = code.name + "/"     # e.g. "code/" — the build root's own dir name
     for rel, content in files.items():
         rel = rel.lstrip("/")
+        # Defensive double-root strip: the worker is told paths are "relative to <root>/" and
+        # some re-prefix that root, emitting code/pkg/x.py -> we'd then root it again under code/
+        # and land at code/code/pkg/x.py. A leading `<root>/` is never legitimate (there is no
+        # code/code/), so undo it; a no-op on correctly-rooted paths.
+        while rel.startswith(root_prefix):
+            rel = rel[len(root_prefix):]
+            log(f"  stripped spurious root prefix from emitted path -> {rel}")
         if owners:
             o = owner_of(owners, rel)
             if o and o != task_id:
@@ -76,7 +88,9 @@ def write_files(project: Project, files: dict, allow_tests: bool,
         text = content if content.endswith("\n") else content + "\n"
         dest.write_text(text)
         written.append(rel)
-        log(f"  wrote {rel}  ({len(text)} bytes, {text.count(chr(10))} lines)")
+        # Log the RESOLVED destination, not the worker's emitted string — a misrouted write
+        # then shows in the log as where it actually landed, not where the model claimed.
+        log(f"  wrote -> {dest}  ({len(text)} bytes, {text.count(chr(10))} lines)")
     return written
 
 
@@ -214,10 +228,11 @@ def build_prompt(project: Project, module: dict, task: dict, authoring: bool) ->
     desc = f" ({project.description})" if project.description else ""
     parts = [
         f"You are an expert Python engineer building the {project.name} project{desc}.",
-        output_contract(pkg),
+        output_contract(pkg, project.code.name),
         f"## Task {task['id']} — {task['title']}",
         f"Specification:\n{task['spec']}",
-        f"Deliverables (paths under code/): {deliverables}",
+        f"Deliverables (paths relative to the {project.code.name}/ root, "
+        f"NOT prefixed with {project.code.name}/): {deliverables}",
     ]
 
     if authoring:

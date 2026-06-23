@@ -72,7 +72,11 @@ in `tasks.yaml`. Rules that make a spec **valid** (get these right or the build 
   re-computed from one stated formula; parametrize name/value arity matches). Frozen tests
   are never edited by implementation tasks.
 - **Implementation tasks write impl only** — deliverables under `code/{{PACKAGE}}/`, never
-  under `tests/`. The doer physically refuses to write `tests/` outside Phase 0.
+  under `tests/`. The doer physically refuses to write `tests/` outside Phase 0, and `raster
+  lint` statically rejects any IMPLEMENT task that lists a `tests/` path as a deliverable
+  (it's that task's input, never its output — put it on the owning P0 task instead). Emit
+  deliverable paths **relative to `code/`** — never prefixed with `code/` (the doer strips a
+  spurious leading `code/`, but don't author the smell).
 - **Shared frozen infra is single-owner.** Give `conftest.py` and any shared golden/constants
   module to **one** owning P0 task; don't list the same shared file as a deliverable on several
   tasks. The doer refuses any non-owner that re-emits it (otherwise a later freeze run wipes an

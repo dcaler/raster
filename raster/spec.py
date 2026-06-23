@@ -135,6 +135,29 @@ def authoring_owners(spec: dict) -> dict:
     return owners
 
 
+def lint_spec(spec: dict) -> list:
+    """Static plan-validation (Layer-1, pre-run, zero implementation present): defects in
+    tasks.yaml itself that statically guarantee a task can never satisfy its contract.
+
+    * An IMPLEMENT (non-P0.*) task that lists a `tests/...` path as a DELIVERABLE: frozen
+      test paths are an IMPLEMENT task's INPUT, never its output — `write_files` refuses every
+      tests/ write from such a task, so the deliverable is unsatisfiable by construction. (A
+      frozen test path belongs on the owning P0.* authoring task's deliverables, not here.)"""
+    violations = []
+    for m in spec.get("modules", []) or []:
+        for t in m.get("tasks", []) or []:
+            tid = str(t.get("id", ""))
+            if tid.startswith("P0"):
+                continue
+            for d in t.get("deliverables", []) or []:
+                if str(d).lstrip("/").startswith("tests/"):
+                    violations.append(
+                        f"task {tid}: deliverable {d!r} is under tests/ — an IMPLEMENT task "
+                        f"cannot write frozen tests (they are its input). Move it to the owning "
+                        f"P0.* authoring task's deliverables.")
+    return violations
+
+
 def owner_of(owners: dict, rel: str):
     """The owning task id for an emitted file `rel`, honoring directory deliverables (a
     declared path ending in '/' owns everything beneath it). None if unowned (free to write)."""

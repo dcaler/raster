@@ -148,9 +148,44 @@ def test_freezelint_clean_suite(tmp_path):
 
 
 def test_cli_lint_clean(tmp_path, monkeypatch, capsys):
-    root = _on_disk_project(tmp_path, monkeypatch)             # has code/ but no tests/
-    assert main(["lint", "--dir", str(root)]) == 0
+    # a spec with NO impl-task tests/ deliverable (the shared SPEC has one, by design, to test
+    # prompt filtering — that would now trip lint_spec), and no tests/ dir -> fully clean.
+    clean = {"meta": {"package": "pkg", "project": "P"}, "modules": [
+        {"id": "M0", "tasks": [{"id": "M0.T1", "deliverables": ["pkg/__init__.py"]}]}]}
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "cfg"))
+    code = tmp_path / "code"
+    (code / "designdocs").mkdir(parents=True)
+    (code / "pkg").mkdir()
+    (code / "designdocs" / "tasks.yaml").write_text(yaml.safe_dump(clean))
+    (code / "raster.yaml").write_text(yaml.safe_dump({"project": "P", "package": "pkg"}))
+    assert main(["lint", "--dir", str(tmp_path)]) == 0
     assert "clean" in capsys.readouterr().out
+
+
+def test_lint_spec_flags_impl_task_test_deliverable():
+    from raster.spec import lint_spec
+    # M0.T1 (an IMPLEMENT task) lists tests/test_smoke.py as a deliverable — unsatisfiable.
+    v = "\n".join(lint_spec(SPEC))
+    assert "M0.T1" in v and "tests/test_smoke.py" in v
+    # P0 authoring tasks legitimately own tests/ paths -> never flagged.
+    assert "P0.M0" not in v
+
+
+def test_write_files_strips_double_root_prefix(tmp_path):
+    project = make_project(tmp_path)                           # root name is "code"
+    # the worker re-prefixes the root it was told paths are "relative to" -> code/pkg/x.py
+    written = execlib.write_files(project, {"code/pkg/x.py": "x = 1",
+                                            "code/pyproject.toml": "[build]"}, allow_tests=False)
+    assert written == ["pkg/x.py", "pyproject.toml"]           # stripped back to the real rel
+    assert (project.code / "pkg" / "x.py").read_text() == "x = 1\n"
+    assert not (project.code / "code").exists()                # never landed at code/code/
+    assert (project.code / "pyproject.toml").exists()
+
+
+def test_output_contract_prohibits_root_prefix():
+    c = execlib.output_contract("pkg", "code")
+    assert "do NOT prefix paths with `code/`" in c
+    assert "not `code/pkg/example.py`" in c                    # negative example present
 
 
 def test_missing_product_import_detection():

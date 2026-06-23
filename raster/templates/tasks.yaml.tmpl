@@ -19,8 +19,13 @@
 #     SELF-CONSISTENT, NEVER correct — keep the freeze->impl `checkpoint:` for whether goldens
 #     are RIGHT, and lean on Layer-1 guards for oracle-checkable values.
 #   * A `--collect-only` freeze gate also auto-runs `raster lint` (a cross-reference linter:
-#     unresolvable golden keys, undefined fixtures, inconsistent call signatures) — Layer-1
-#     defects that pass a green collect but hard-block impl. (`raster lint` is also run by hand.)
+#     unresolvable golden keys, undefined fixtures, inconsistent call signatures, AND a static
+#     spec check — e.g. an IMPLEMENT task that lists a frozen tests/ path as a deliverable) —
+#     Layer-1 defects that pass a green collect but hard-block impl. (`raster lint` runs by hand too.)
+#   * Emit deliverable PATHS RELATIVE TO code/ — NEVER prefixed with code/. The doer roots writes
+#     under code/, so a code/-prefixed path would double (code/code/...); it strips a spurious
+#     leading code/ defensively, but don't author the smell. (IMPLEMENT deliverables live under
+#     code/<package>/; only P0.* tasks own tests/ paths.)
 #   * SHARED frozen files are SINGLE-OWNER. Give conftest.py and any shared golden/constants
 #     module to ONE owning P0 task (the first task that lists it as a deliverable); raster
 #     refuses every other task's attempt to overwrite it (a re-emit otherwise wipes earlier
