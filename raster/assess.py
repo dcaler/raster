@@ -45,6 +45,18 @@ def run_assess(args) -> int:
     log(f"  cmd={cmd!r}  cwd={project.code}")
     t = time.monotonic()
     ok, output = execlib.run_test(project, cmd, stub_pkg=stub_pkg)
+
+    # A freeze gate (collect-only) also runs the Layer-1 cross-reference linter: it catches
+    # mechanically-checkable freeze defects (unresolvable golden keys, undefined fixtures,
+    # inconsistent call signatures) that a green collect can't see, before the human checkpoint.
+    if stub_pkg and ok:
+        from raster import freezelint
+        lints = freezelint.lint_frozen_tests(project.code, project.package)
+        if lints:
+            ok = False
+            output += ("\n[raster] frozen-test cross-reference linter — "
+                       f"{len(lints)} violation(s):\n" + "\n".join(f"  - {v}" for v in lints))
+
     log(f"{kind} {tid}: finished in {fmt_secs(time.monotonic() - t)} "
         f"-> {'PASS' if ok else 'FAIL'} | {execlib.summarize_pytest(output)}")
     if not ok:

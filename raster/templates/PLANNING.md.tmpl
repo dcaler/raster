@@ -76,12 +76,18 @@ in `tasks.yaml`. Rules that make a spec **valid** (get these right or the build 
 - **Shared frozen infra is single-owner.** Give `conftest.py` and any shared golden/constants
   module to **one** owning P0 task; don't list the same shared file as a deliverable on several
   tasks. The doer refuses any non-owner that re-emits it (otherwise a later freeze run wipes an
-  earlier run's fixtures, last-writer-wins). And pin **canonical identifier names** once in
-  DESIGN — name drift across files is invisible to the freeze collect (the absent product is
-  stubbed, so any name resolves) but makes the implementation unsatisfiable.
+  earlier run's fixtures, last-writer-wins).
+- **Pin a canonical registry in DESIGN — names, vocabulary, AND signatures.** Not just class/
+  identifier names: also the label/key **vocabulary** (the enum-like strings and dict-key scheme —
+  note-names vs Roman, `"major"` vs `"maj"`, status strings) and the call/constructor **signature**
+  of every shared object. All three drift across independently-authored tasks and are invisible to
+  the freeze collect (the absent product is stubbed, so any name/key/call-shape resolves) yet are
+  fatal to impl. raster injects this registry into every authoring prompt.
 - **A freeze collect proves *collectible + self-consistent*, never *correct*.** raster stubs the
   not-yet-built product so `--collect-only` passes; that says nothing about whether the goldens
-  are right. Keep the freeze→impl `checkpoint:` and Layer-1 guards (Step 3b) for correctness.
+  are right. The generated **freeze gate** additionally runs `raster lint` (a cross-reference
+  linter: unresolvable golden keys, undefined fixtures, inconsistent call signatures) — but value-
+  and intent-correctness still need the freeze→impl `checkpoint:` and Layer-1 guards (Step 3b).
 - **`depends_on`** encodes the DAG; `raster queue` linearizes it into a single-parent
   trundlr chain, so a failure auto-blocks everything downstream. Order tasks so each
   depends on what it actually needs.

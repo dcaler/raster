@@ -48,6 +48,9 @@ def build_parser() -> argparse.ArgumentParser:
     test.add_argument("id", help="gate id (e.g. G2) or task id (e.g. M2.T1)")
     test.add_argument("--dry-run", action="store_true", help="print the command and exit")
 
+    lint = sub.add_parser("lint", help="cross-reference linter over the frozen test suite")
+    _common(lint)
+
     return ap
 
 
@@ -68,6 +71,9 @@ def main(argv=None) -> int:
     if args.cmd == "test":
         from raster.assess import run_assess
         return run_assess(args)
+    if args.cmd == "lint":
+        from raster.freezelint import run_lint
+        return run_lint(args)
     return 1
 
 

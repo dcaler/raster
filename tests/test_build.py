@@ -108,6 +108,51 @@ def test_freeze_stub_resolves_absent_product():
             del sys.modules[k]
 
 
+def test_freezelint_catches_cross_reference_defects(tmp_path):
+    from raster.freezelint import lint_frozen_tests
+    code = tmp_path / "code"
+    tests = code / "tests"
+    tests.mkdir(parents=True)
+    (tests / "golden.py").write_text('DIATONIC = {"C": 0, "G": 7, "F": 5}\n')
+    (tests / "conftest.py").write_text(
+        "import pytest\n@pytest.fixture\ndef real_fixture():\n    return 1\n")
+    (tests / "test_a.py").write_text(
+        "import pytest\n"
+        "from golden import DIATONIC\n"
+        "from pkg.model import Model\n"
+        "def test_key_ok(real_fixture, tmp_path):\n    assert DIATONIC['C'] == 0\n"
+        "def test_key_bad():\n    assert DIATONIC['I'] == 0\n"               # unresolvable golden key
+        "def test_missing(ghost_fixture):\n    assert ghost_fixture\n"       # undefined fixture
+        "@pytest.mark.parametrize('n,expected', [(1, 1)])\n"
+        "def test_param(n, expected):\n    assert n == expected\n"           # params are NOT fixtures
+        "def test_pos():\n    Model(some_config)\n")                         # positional call
+    (tests / "test_b.py").write_text(
+        "from pkg.model import Model\n"
+        "def test_kw():\n    Model(n_chord_types=3, bars_per_window=4)\n")   # keyword call -> schism
+
+    v = "\n".join(lint_frozen_tests(code, "pkg"))
+    assert "DIATONIC['I']" in v and "key absent" in v          # golden-key resolvability
+    assert "ghost_fixture" in v and "defined nowhere" in v     # fixture resolvability
+    assert "real_fixture" not in v and "tmp_path" not in v     # defined + builtin -> not flagged
+    assert "'expected'" not in v and "requests fixture 'n'" not in v   # parametrize names excluded
+    assert "Model called inconsistently" in v                 # call-signature coherence
+
+
+def test_freezelint_clean_suite(tmp_path):
+    from raster.freezelint import lint_frozen_tests
+    code = tmp_path / "code"
+    (code / "tests").mkdir(parents=True)
+    (code / "tests" / "test_ok.py").write_text(
+        'D = {"a": 1}\ndef test_x():\n    assert D["a"] == 1\n')
+    assert lint_frozen_tests(code, "pkg") == []                # no tests/ defects, no false positives
+
+
+def test_cli_lint_clean(tmp_path, monkeypatch, capsys):
+    root = _on_disk_project(tmp_path, monkeypatch)             # has code/ but no tests/
+    assert main(["lint", "--dir", str(root)]) == 0
+    assert "clean" in capsys.readouterr().out
+
+
 def test_missing_product_import_detection():
     from raster.build import _missing_product_import
     assert _missing_product_import("ModuleNotFoundError: No module named 'postineq'", "postineq")

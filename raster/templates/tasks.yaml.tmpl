@@ -18,12 +18,16 @@
 #     gate) so collection proceeds. A `--collect-only` gate therefore proves only COLLECTIBLE +
 #     SELF-CONSISTENT, NEVER correct — keep the freeze->impl `checkpoint:` for whether goldens
 #     are RIGHT, and lean on Layer-1 guards for oracle-checkable values.
+#   * A `--collect-only` freeze gate also auto-runs `raster lint` (a cross-reference linter:
+#     unresolvable golden keys, undefined fixtures, inconsistent call signatures) — Layer-1
+#     defects that pass a green collect but hard-block impl. (`raster lint` is also run by hand.)
 #   * SHARED frozen files are SINGLE-OWNER. Give conftest.py and any shared golden/constants
 #     module to ONE owning P0 task (the first task that lists it as a deliverable); raster
 #     refuses every other task's attempt to overwrite it (a re-emit otherwise wipes earlier
 #     fixtures, last-writer-wins). Don't list the same shared file as a deliverable on many tasks.
-#   * CANONICAL NAMES: pin one spelling per class/identifier in DESIGN and reuse it across tasks.
-#     Name drift is invisible to the stubbed collect but makes the implementation unsatisfiable.
+#   * CANONICAL REGISTRY: pin in DESIGN, and reuse across tasks, ONE spelling per class/identifier,
+#     ONE label/key VOCABULARY (note-names vs Roman, "major" vs "maj"), and ONE call/constructor
+#     SIGNATURE per shared object. All drift invisibly past the stubbed collect yet break impl.
 #
 # Per-task contract:   {id, title, worker, depends_on, deliverables, spec, unit_test:{file,cmd}}
 # Per-module contract: {id, name, worker, tasks:[...], gate:{id, integration_test:{file,cmd}, spec},
