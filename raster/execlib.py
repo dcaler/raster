@@ -10,9 +10,10 @@ import os
 import re
 import subprocess
 import sys
+from pathlib import Path
 
 from raster.runlog import log
-from raster.spec import Project, module_by_id
+from raster.spec import Project, module_by_id, owner_of
 
 FILE_RE = re.compile(r"=== FILE: (.+?) ===\n(.*?)\n=== END FILE ===", re.DOTALL)
 TEST_TIMEOUT = int(os.environ.get("RASTER_TEST_TIMEOUT", 600))
@@ -48,11 +49,22 @@ def package_sources(project: Project) -> str:
     return "\n\n".join(chunks)
 
 
-def write_files(project: Project, files: dict, allow_tests: bool) -> list:
+def write_files(project: Project, files: dict, allow_tests: bool,
+                owners: dict = None, task_id: str = None) -> list:
+    """Write the worker's emitted files into code/, enforcing two locks:
+    - implementation tasks (allow_tests=False) may not write under tests/ at all;
+    - a SHARED frozen file (conftest.py, the golden/constants module) has a single owning
+      authoring task — every other task is refused, so a later P0.* run can't re-emit it in
+      full and silently wipe an earlier run's fixtures (last-writer-wins)."""
     written = []
     code = project.code
     for rel, content in files.items():
         rel = rel.lstrip("/")
+        if owners:
+            o = owner_of(owners, rel)
+            if o and o != task_id:
+                log(f"  refusing to overwrite single-owner frozen file {rel} (owned by {o})")
+                continue
         if not allow_tests and rel.startswith("tests/"):
             log(f"  refusing to write frozen test file: {rel}")
             continue
@@ -87,9 +99,26 @@ def normalize_pytest_cmd(cmd: str) -> str:
     return re.sub(r"(?<!-m )\bpytest\b", f"{sys.executable} -m pytest", cmd)
 
 
-def run_test(project: Project, cmd: str):
+def _freeze_stub_env(stub_pkg: str) -> dict:
+    """Env that loads the fallback-only product stub (raster/_freezestub.py) into a
+    freeze-phase pytest collect, so tests importing the not-yet-built `stub_pkg` resolve
+    instead of dying on ModuleNotFoundError. The stub is phase-scoped (set ONLY for these
+    runs) and no-ops once the real package exists, so it can't mask a real broken import."""
+    env = os.environ.copy()
+    raster_root = str(Path(__file__).resolve().parent.parent)   # dir holding the `raster` pkg
+    env["PYTHONPATH"] = os.pathsep.join(p for p in (raster_root, env.get("PYTHONPATH", "")) if p)
+    env["PYTEST_ADDOPTS"] = (env.get("PYTEST_ADDOPTS", "") + " -p raster._freezestub").strip()
+    env["RASTER_STUB_PACKAGE"] = stub_pkg
+    return env
+
+
+def run_test(project: Project, cmd: str, stub_pkg: str = None):
+    """Run a pytest command in code/. `stub_pkg` (the product package) injects the
+    freeze-phase absent-product stub — pass it ONLY for freeze collects (P0.* authoring
+    and `--collect-only` freeze gates), never for an implementation gate."""
+    env = _freeze_stub_env(stub_pkg) if stub_pkg else None
     try:
-        proc = subprocess.run(cmd, shell=True, cwd=project.code,
+        proc = subprocess.run(cmd, shell=True, cwd=project.code, env=env,
                               capture_output=True, text=True, timeout=TEST_TIMEOUT)
     except subprocess.TimeoutExpired as e:
         out = (e.stdout or "") + (e.stderr or "")
@@ -159,7 +188,16 @@ _AUTHOR_INSTRUCTIONS = (
     "invariant, a domain rule the worker can get self-consistently wrong), also author a small "
     "IMPL-INDEPENDENT GUARD asserting that ground truth, under tests/golden/ (a path no task "
     "lists as a deliverable). It catches errors that are consistent in the tables yet wrong "
-    "against the world."
+    "against the world.\n"
+    "CANONICAL NAMES — use ONE spelling per class/identifier across EVERY file (one name for the "
+    "model class, one for the config class, etc.). The product is STUBBED during collection, so a "
+    "stub resolves ANY name and name drift is invisible to the collect gate — but three names for "
+    "one class makes the implementation unsatisfiable. Match the canonical names in DESIGN/the "
+    "spec exactly.\n"
+    "SHARED FILES are SINGLE-OWNER — author conftest.py and any shared golden/constants module "
+    "ONCE, in full, only in the task that owns them. Never re-emit a shared file from another "
+    "module's authoring task: a later full re-emit silently wipes the fixtures an earlier run "
+    "added (last-writer-wins). Emit only the files THIS task owns."
 )
 
 

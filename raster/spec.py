@@ -116,3 +116,32 @@ def module_by_id(spec: dict, mid: str):
         if m.get("id") == mid:
             return m
     return None
+
+
+def authoring_owners(spec: dict) -> dict:
+    """{frozen-test deliverable -> the single authoring (P0.*) task that owns it}.
+
+    Every frozen file has ONE owning task = the first P0.* task in spec order that lists it
+    as a deliverable. Shared infra (conftest.py, the golden/constants module) is otherwise
+    re-emitted in full by every authoring run, so last-writer-wins silently clobbers earlier
+    fixtures. `write_files` refuses any task that isn't a file's owner (see owner_of)."""
+    owners = {}
+    for m in spec.get("modules", []) or []:
+        for t in m.get("tasks", []) or []:
+            if not str(t.get("id", "")).startswith("P0"):
+                continue
+            for d in t.get("deliverables", []) or []:
+                owners.setdefault(str(d).lstrip("/"), t["id"])
+    return owners
+
+
+def owner_of(owners: dict, rel: str):
+    """The owning task id for an emitted file `rel`, honoring directory deliverables (a
+    declared path ending in '/' owns everything beneath it). None if unowned (free to write)."""
+    rel = rel.lstrip("/")
+    if rel in owners:
+        return owners[rel]
+    for d, owner in owners.items():
+        if d.endswith("/") and rel.startswith(d):
+            return owner
+    return None

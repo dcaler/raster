@@ -12,6 +12,19 @@
 # code/tests/ FIRST, with hand-computed, internally-consistent golden values. The doer
 # then writes IMPLEMENTATION ONLY for M* tasks and never creates/edits anything under tests/.
 #
+# FREEZE-PHASE MECHANICS (handled by raster, not by you — but design the spec to fit them):
+#   * The product package does NOT exist at freeze time, yet frozen tests import it. raster
+#     STUBS the absent package during freeze collects (P0.* authoring + any `--collect-only`
+#     gate) so collection proceeds. A `--collect-only` gate therefore proves only COLLECTIBLE +
+#     SELF-CONSISTENT, NEVER correct — keep the freeze->impl `checkpoint:` for whether goldens
+#     are RIGHT, and lean on Layer-1 guards for oracle-checkable values.
+#   * SHARED frozen files are SINGLE-OWNER. Give conftest.py and any shared golden/constants
+#     module to ONE owning P0 task (the first task that lists it as a deliverable); raster
+#     refuses every other task's attempt to overwrite it (a re-emit otherwise wipes earlier
+#     fixtures, last-writer-wins). Don't list the same shared file as a deliverable on many tasks.
+#   * CANONICAL NAMES: pin one spelling per class/identifier in DESIGN and reuse it across tasks.
+#     Name drift is invisible to the stubbed collect but makes the implementation unsatisfiable.
+#
 # Per-task contract:   {id, title, worker, depends_on, deliverables, spec, unit_test:{file,cmd}}
 # Per-module contract: {id, name, worker, tasks:[...], gate:{id, integration_test:{file,cmd}, spec},
 #                       checkpoint?: <review prompt>}

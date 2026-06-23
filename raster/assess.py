@@ -37,10 +37,14 @@ def run_assess(args) -> int:
         print(f"[{kind} {tid}] cwd={project.code}\n{cmd}")
         return 0
 
+    # A `--collect-only` gate is a freeze-phase structural check (it can't be an impl gate,
+    # which must actually RUN), so it gets the absent-product stub; a real impl gate never does.
+    stub_pkg = project.package if "--collect-only" in cmd else None
+
     log(f"START {kind}={tid} ({title!r:.80})")
     log(f"  cmd={cmd!r}  cwd={project.code}")
     t = time.monotonic()
-    ok, output = execlib.run_test(project, cmd)
+    ok, output = execlib.run_test(project, cmd, stub_pkg=stub_pkg)
     log(f"{kind} {tid}: finished in {fmt_secs(time.monotonic() - t)} "
         f"-> {'PASS' if ok else 'FAIL'} | {execlib.summarize_pytest(output)}")
     if not ok:

@@ -73,6 +73,15 @@ in `tasks.yaml`. Rules that make a spec **valid** (get these right or the build 
   are never edited by implementation tasks.
 - **Implementation tasks write impl only** — deliverables under `code/{{PACKAGE}}/`, never
   under `tests/`. The doer physically refuses to write `tests/` outside Phase 0.
+- **Shared frozen infra is single-owner.** Give `conftest.py` and any shared golden/constants
+  module to **one** owning P0 task; don't list the same shared file as a deliverable on several
+  tasks. The doer refuses any non-owner that re-emits it (otherwise a later freeze run wipes an
+  earlier run's fixtures, last-writer-wins). And pin **canonical identifier names** once in
+  DESIGN — name drift across files is invisible to the freeze collect (the absent product is
+  stubbed, so any name resolves) but makes the implementation unsatisfiable.
+- **A freeze collect proves *collectible + self-consistent*, never *correct*.** raster stubs the
+  not-yet-built product so `--collect-only` passes; that says nothing about whether the goldens
+  are right. Keep the freeze→impl `checkpoint:` and Layer-1 guards (Step 3b) for correctness.
 - **`depends_on`** encodes the DAG; `raster queue` linearizes it into a single-parent
   trundlr chain, so a failure auto-blocks everything downstream. Order tasks so each
   depends on what it actually needs.

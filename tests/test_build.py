@@ -63,6 +63,59 @@ def test_write_files_guards(tmp_path):
     assert execlib.write_files(project, {"tests/t.py": "frozen"}, allow_tests=True) == ["tests/t.py"]
 
 
+def test_write_files_single_owner_protection(tmp_path):
+    project = make_project(tmp_path)
+    owners = {"tests/conftest.py": "P0.T0"}
+    # a non-owner authoring task is refused (would clobber the owner's shared infra)
+    assert execlib.write_files(project, {"tests/conftest.py": "x"}, allow_tests=True,
+                               owners=owners, task_id="P0.M1") == []
+    assert not (project.code / "tests" / "conftest.py").exists()
+    # the owning task may write it
+    assert execlib.write_files(project, {"tests/conftest.py": "y"}, allow_tests=True,
+                               owners=owners, task_id="P0.T0") == ["tests/conftest.py"]
+
+
+def test_authoring_owners_and_owner_of():
+    from raster.spec import authoring_owners, owner_of
+    spec = {"modules": [
+        {"id": "P0", "tasks": [
+            {"id": "P0.T0", "deliverables": ["tests/conftest.py", "tests/golden/"]},
+            {"id": "P0.M1", "deliverables": ["tests/test_grid.py", "tests/conftest.py"]},
+        ]},
+        {"id": "M1", "tasks": [{"id": "M1.T1", "deliverables": ["pkg/grid.py"]}]},
+    ]}
+    owners = authoring_owners(spec)
+    assert owners["tests/conftest.py"] == "P0.T0"        # first P0 declarer owns it
+    assert owners["tests/test_grid.py"] == "P0.M1"
+    assert "pkg/grid.py" not in owners                   # only P0.* author shared infra
+    assert owner_of(owners, "tests/golden/consts.py") == "P0.T0"   # dir deliverable owns subtree
+    assert owner_of(owners, "tests/test_new.py") is None          # unowned -> writable
+
+
+def test_freeze_stub_resolves_absent_product():
+    import importlib
+    from raster._freezestub import _StubFinder
+    finder = _StubFinder("notreal_product_xyz")
+    sys.meta_path.append(finder)
+    try:
+        cfg = importlib.import_module("notreal_product_xyz.config")
+        assert cfg.AnyName is not None                   # any attribute resolves to a dummy
+        from notreal_product_xyz.model import Whatever   # noqa: F401 — submodule + name resolve
+        assert callable(Whatever)                        # dummy is callable: inert at collect time
+    finally:
+        sys.meta_path.remove(finder)
+        for k in [k for k in sys.modules if k.startswith("notreal_product_xyz")]:
+            del sys.modules[k]
+
+
+def test_missing_product_import_detection():
+    from raster.build import _missing_product_import
+    assert _missing_product_import("ModuleNotFoundError: No module named 'postineq'", "postineq")
+    assert _missing_product_import("No module named 'postineq.config'", "postineq")
+    assert not _missing_product_import("No module named 'numpy'", "postineq")
+    assert not _missing_product_import("anything", "")
+
+
 def test_normalize_pytest_cmd():
     out = execlib.normalize_pytest_cmd("pytest -q tests/")
     assert out == f"{sys.executable} -m pytest -q tests/"

@@ -12,11 +12,19 @@ import time
 
 from raster import execlib, ollama
 from raster.runlog import fmt_secs, log
-from raster.spec import find_task, load_project
+from raster.spec import authoring_owners, find_task, load_project
 
 MAX_ATTEMPTS = int(os.environ.get("RASTER_MAX_ATTEMPTS", 4))
 ESCALATE_AFTER = int(os.environ.get("RASTER_ESCALATE_AFTER", 2))   # attempts per rung before climbing
 MAX_OUTPUT_CHARS = 6000                                            # of test output fed back
+
+
+def _missing_product_import(output: str, pkg: str) -> bool:
+    """A freeze collect that still can't import the product package — the stub should have
+    resolved it, so this is a configuration fault (stub not loaded), not a worker-repairable
+    test bug. Looping a repair (least of all a thinking one) on it just burns the budget."""
+    return bool(pkg) and (f"No module named '{pkg}'" in output
+                          or f"No module named '{pkg}." in output)
 
 
 def start_index(ladder: list, worker_key: str) -> int:
@@ -62,6 +70,8 @@ def run_build(args) -> int:
     ladder = project.ladder()
     start = start_index(ladder, task.get("worker", "strong"))
     unit_cmd = execlib.normalize_pytest_cmd(task["unit_test"]["cmd"])
+    owners = authoring_owners(project.spec)   # single-owner write-protection on shared frozen infra
+    stub_pkg = project.package if authoring else None   # freeze collects stub the absent product
 
     prompt = execlib.build_prompt(project, module, task, authoring)
     if args.dry_run:
@@ -98,11 +108,12 @@ def run_build(args) -> int:
             continue
 
         log(f"attempt {attempt}: parsed {len(files)} file(s): {list(files)}")
-        execlib.write_files(project, files, allow_tests=authoring)
+        execlib.write_files(project, files, allow_tests=authoring,
+                            owners=owners, task_id=args.task)
 
         log(f"attempt {attempt}: running test: {unit_cmd}")
         t_test = time.monotonic()
-        ok, output = execlib.run_test(project, unit_cmd)
+        ok, output = execlib.run_test(project, unit_cmd, stub_pkg=stub_pkg)
         log(f"attempt {attempt}: test finished in {fmt_secs(time.monotonic() - t_test)} "
             f"-> {'PASS' if ok else 'FAIL'} | {execlib.summarize_pytest(output)}")
         if ok:
@@ -112,11 +123,23 @@ def run_build(args) -> int:
             log(f"DONE build={args.task}: PASS on attempt {attempt}")
             return 0
 
+        if authoring and _missing_product_import(output, project.package):
+            log(f"FAILED build={args.task}: a freeze-phase collect still cannot import the "
+                f"product package {project.package!r} despite the fallback stub. That is a "
+                f"configuration fault (the stub plugin did not load), not a worker-repairable "
+                f"test bug — aborting rather than burning the repair budget on an unsatisfiable "
+                f"loop. Check that `raster` is importable on PYTHONPATH for the test subprocess.")
+            return 1
+
         if authoring:
             fix = ("These are pytest COLLECTION errors in the TEST files you wrote — the tests "
                    "must import and collect cleanly (they may still FAIL when run against the "
-                   "not-yet-written implementation; that is expected and fine). Fix the TEST "
-                   "files themselves and re-emit ALL files in full. Do NOT write implementation.")
+                   "not-yet-written implementation; that is expected and fine). The product "
+                   f"package ({project.package}) is STUBBED during this collect, so an import of "
+                   "it is NOT the cause. Fix only SATISFIABLE test bugs: a pytest.mark.parametrize "
+                   "name/value-arity mismatch, a name missing from the golden/constants module, a "
+                   "bad import among the test files, or a syntax error. Re-emit ALL files in full. "
+                   "Do NOT write implementation.")
         else:
             fix = "Fix the implementation and re-emit ALL files in full."
         messages.append({"role": "assistant", "content": reply})
