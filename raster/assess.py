@@ -51,7 +51,7 @@ def run_assess(args) -> int:
     # inconsistent call signatures) that a green collect can't see, before the human checkpoint.
     if stub_pkg and ok:
         from raster import freezelint
-        lints = freezelint.lint_frozen_tests(project.code, project.package)
+        lints = freezelint.lint_frozen_tests(project.code, project.package, project.spec)
         if lints:
             ok = False
             output += ("\n[raster] frozen-test cross-reference linter — "
@@ -59,6 +59,13 @@ def run_assess(args) -> int:
 
     log(f"{kind} {tid}: finished in {fmt_secs(time.monotonic() - t)} "
         f"-> {'PASS' if ok else 'FAIL'} | {execlib.summarize_pytest(output)}")
+    skipped = execlib.skipped_count(output)
+    if ok and not stub_pkg and skipped:
+        # A green gate/test that SKIPPED tests has proven nothing about those paths — and a
+        # skip-on-ImportError schism reports green while never running. Surface it loudly.
+        log(f"  WARNING: {kind} {tid} passed with {skipped} SKIPPED test(s) — those paths ran "
+            f"NOTHING. Confirm the skips are intentional, not a module-name schism masking a "
+            f"false-green (see `raster lint`).")
     if not ok:
         # no repair loop here; surface the tail so the failure is self-contained.
         log(f"{kind} output tail:\n" + "\n".join(output.splitlines()[-25:]))

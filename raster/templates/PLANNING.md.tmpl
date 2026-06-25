@@ -92,6 +92,15 @@ in `tasks.yaml`. Rules that make a spec **valid** (get these right or the build 
   are right. The generated **freeze gate** additionally runs `raster lint` (a cross-reference
   linter: unresolvable golden keys, undefined fixtures, inconsistent call signatures) — but value-
   and intent-correctness still need the freeze→impl `checkpoint:` and Layer-1 guards (Step 3b).
+- **Green ≠ verified — design so every frozen test actually RUNS against the product.** Don't
+  author `try: import <product>; except ImportError: pytest.skip(...)`: the product is stubbed at
+  collect time, so that idiom only fires on a real name schism and converts it into a permanent
+  false-green (a whole module reporting green while never running once). Import product modules by
+  their **exact deliverable name**; `raster lint` now flags both the skip-on-import idiom and any
+  test importing a module no task delivers. raster also warns loudly when a gate/test passes with
+  skipped tests. Remember the **first task to *consume* an upstream module is its real integration
+  test** — order the DAG so consumption happens early, and don't read upstream false-greens
+  surfacing there as the consumer's bug.
 - **`depends_on`** encodes the DAG; `raster queue` linearizes it into a single-parent
   trundlr chain, so a failure auto-blocks everything downstream. Order tasks so each
   depends on what it actually needs.

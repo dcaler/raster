@@ -10,6 +10,12 @@ intent-correctness (which no linter can promote).
 Checks (each maps to an observed defect class):
   * spec validity (lint_spec) — a tasks.yaml defect that's statically unsatisfiable, e.g. an
     IMPLEMENT task listing a frozen tests/ path as a deliverable (write_files refuses it).
+  * skip-on-ImportError      — a frozen test that swallows an ImportError of a product module
+    into pytest.skip turns a permanent NAME SCHISM into a permanent false-green (a whole module
+    reports green while never running once). Flag the idiom; let the absent-product stub handle
+    "not built yet" so a schism fails loudly instead.
+  * module-import resolvability — every product module a frozen test imports must correspond to a
+    declared deliverable module (caught `import chord` when the deliverable was `chords`).
   * golden-key resolvability  — a literal subscript NAME["lit"] into a golden dict whose
     literal keys we can see must have "lit" among them (caught a note-name vs Roman schism).
   * fixture resolvability     — every fixture a test/fixture requests is defined somewhere
@@ -20,7 +26,7 @@ Checks (each maps to an observed defect class):
 
 import ast
 
-from raster.spec import lint_spec, load_project
+from raster.spec import declared_modules, lint_spec, load_project
 
 # pytest's built-in fixtures — requested but never user-defined.
 PYTEST_BUILTIN_FIXTURES = {
@@ -93,6 +99,47 @@ def _golden_dicts(trees: dict) -> dict:
     return out
 
 
+def _catches_import_error(handler: ast.ExceptHandler) -> bool:
+    """An `except` clause that catches ImportError/ModuleNotFoundError (or bare except)."""
+    t = handler.type
+    if t is None:                                       # bare `except:`
+        return True
+    names = [t] if not isinstance(t, ast.Tuple) else list(t.elts)
+    return any(getattr(n, "id", None) in ("ImportError", "ModuleNotFoundError") for n in names)
+
+
+def _has_skip(nodes) -> bool:
+    """A pytest.skip(...) / bare skip(...) / pytest.importorskip(...) call anywhere in `nodes`."""
+    for body_node in nodes:
+        for node in ast.walk(body_node):
+            if isinstance(node, ast.Call):
+                f = node.func
+                name = f.attr if isinstance(f, ast.Attribute) else getattr(f, "id", None)
+                if name in ("skip", "importorskip"):
+                    return True
+    return False
+
+
+def _imported_package_modules(nodes, package: str) -> set:
+    """Unambiguous product module imports under `package` among `nodes` (the try body):
+    `import pkg.sub` and `from pkg.sub import ...` -> {"pkg.sub"}; also `from pkg import x`
+    yields the candidate submodule "pkg.x" (ambiguous symbol-vs-module, reported in context)."""
+    mods = set()
+    for body_node in nodes:
+        for node in ast.walk(body_node):
+            if isinstance(node, ast.Import):
+                for n in node.names:
+                    if n.name == package or n.name.startswith(package + "."):
+                        mods.add(n.name)
+            elif isinstance(node, ast.ImportFrom) and node.module and node.level == 0:
+                if node.module == package:
+                    for n in node.names:                # from pkg import sub  -> candidate pkg.sub
+                        mods.add(f"{package}.{n.name}")
+                elif node.module.startswith(package + "."):
+                    mods.add(node.module)
+    return mods
+
+
 def _product_symbols(trees: dict, package: str) -> set:
     syms = set()
     if not package:
@@ -108,16 +155,58 @@ def _product_symbols(trees: dict, package: str) -> set:
     return syms
 
 
-def lint_frozen_tests(code, package: str) -> list:
-    """Return a list of human-readable cross-reference violations (empty == clean)."""
+def lint_frozen_tests(code, package: str, spec: dict = None) -> list:
+    """Return a list of human-readable cross-reference violations (empty == clean). When `spec`
+    is given, also checks that every product module a test imports is a declared deliverable."""
     tests = code / "tests"
     files = sorted(tests.rglob("*.py")) if tests.is_dir() else []
     trees = _parse(files)
     violations = []
+    declared = declared_modules(spec, package) if spec else None
 
     for f, tree in trees.items():
         if isinstance(tree, SyntaxError):
             violations.append(f"{f.name}:{tree.lineno}: SYNTAX ERROR — {tree.msg}")
+
+    # skip-on-ImportError of a product module: turns a name schism into a permanent false-green.
+    for f, tree in trees.items():
+        if isinstance(tree, SyntaxError):
+            continue
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Try):
+                continue
+            mods = _imported_package_modules(node.body, package)
+            if not mods:
+                continue
+            for h in node.handlers:
+                if _catches_import_error(h) and _has_skip(h.body):
+                    violations.append(
+                        f"{f.name}:{h.lineno}: skip-on-ImportError of product import "
+                        f"({', '.join(sorted(mods))}) — a name schism would skip (permanent "
+                        f"false-green), not fail. Import directly; the freeze stub fabricates "
+                        f"the not-yet-built module so a real schism fails loudly.")
+
+    # module-import resolvability: a test importing a product module no task delivers.
+    if declared is not None:
+        for f, tree in trees.items():
+            if isinstance(tree, SyntaxError):
+                continue
+            for node in ast.walk(tree):
+                mods = set()
+                if isinstance(node, ast.Import):
+                    mods = {n.name for n in node.names
+                            if n.name == package or n.name.startswith(package + ".")}
+                elif (isinstance(node, ast.ImportFrom) and node.module and node.level == 0
+                      and node.module.startswith(package + ".")):
+                    mods = {node.module}                # from pkg.sub import ... -> module is pkg.sub
+                for mod in sorted(mods):
+                    if mod != package and mod not in declared:
+                        near = [d for d in declared if d.split(".")[-1].rstrip("s")
+                                == mod.split(".")[-1].rstrip("s")]
+                        hint = f" (did you mean {near[0]}?)" if near else ""
+                        violations.append(
+                            f"{f.name}:{node.lineno}: imports product module {mod!r} that no task "
+                            f"declares as a deliverable — name schism, not a pending feature{hint}.")
 
     golden = _golden_dicts(trees)
     for f, tree in trees.items():
@@ -182,7 +271,8 @@ def lint_frozen_tests(code, package: str) -> list:
 
 def run_lint(args) -> int:
     project = load_project(args.dir)
-    violations = lint_spec(project.spec) + lint_frozen_tests(project.code, project.package)
+    violations = (lint_spec(project.spec)
+                  + lint_frozen_tests(project.code, project.package, project.spec))
     if not violations:
         print("[raster lint] frozen-test cross-reference: clean")
         return 0

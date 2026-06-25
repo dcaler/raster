@@ -116,6 +116,12 @@ def run_build(args) -> int:
         ok, output = execlib.run_test(project, unit_cmd, stub_pkg=stub_pkg)
         log(f"attempt {attempt}: test finished in {fmt_secs(time.monotonic() - t_test)} "
             f"-> {'PASS' if ok else 'FAIL'} | {execlib.summarize_pytest(output)}")
+        if ok and not authoring and execlib.skipped_count(output):
+            # A green IMPLEMENT test that skipped paths has demonstrated nothing about them —
+            # a module-name schism skip-on-ImportError reports green while never running once.
+            log(f"  WARNING: passed with {execlib.skipped_count(output)} SKIPPED test(s) — "
+                f"those paths ran NOTHING; confirm it's not a name-schism false-green "
+                f"(see `raster lint`).")
         if ok:
             kind = "author tests" if authoring else "implement"
             execlib.git_commit_push(project, f"{args.task} ({kind}): {task['title']}\n\n"

@@ -138,6 +138,51 @@ def test_freezelint_catches_cross_reference_defects(tmp_path):
     assert "Model called inconsistently" in v                 # call-signature coherence
 
 
+def test_freezelint_skip_on_importerror_and_module_schism(tmp_path):
+    from raster.freezelint import lint_frozen_tests
+    code = tmp_path / "code"
+    tests = code / "tests"
+    tests.mkdir(parents=True)
+    (tests / "test_voc.py").write_text(
+        "import pytest\n"
+        "try:\n"
+        "    from pkg import chord\n"                    # schism: deliverable is pkg/chords.py
+        "except ImportError:\n"
+        "    pytest.skip('not yet implemented', allow_module_level=True)\n"
+        "import pkg.chord\n"                             # unambiguous schism import
+        "def test_x():\n    assert chord\n")
+    spec = {"meta": {"package": "pkg"}, "modules": [
+        {"id": "M1", "tasks": [{"id": "M1.T1", "deliverables": ["pkg/chords.py"]}]}]}
+    v = "\n".join(lint_frozen_tests(code, "pkg", spec))
+    assert "skip-on-ImportError" in v                    # idiom flagged (check A)
+    assert "no task declares" in v and "pkg.chord" in v  # module-import resolvability (check B)
+    assert "did you mean pkg.chords?" in v               # singular/plural hint
+
+
+def test_freezelint_module_resolvability_clean(tmp_path):
+    from raster.freezelint import lint_frozen_tests
+    code = tmp_path / "code"
+    (code / "tests").mkdir(parents=True)
+    (code / "tests" / "test_ok.py").write_text(
+        "import pkg.chords\nfrom pkg.metrics import jaccard\ndef test_x():\n    assert pkg.chords\n")
+    spec = {"meta": {"package": "pkg"}, "modules": [{"id": "M1", "tasks": [
+        {"id": "M1.T1", "deliverables": ["pkg/chords.py", "pkg/metrics/__init__.py"]}]}]}
+    assert lint_frozen_tests(code, "pkg", spec) == []    # both modules declared -> clean
+
+
+def test_declared_modules():
+    from raster.spec import declared_modules
+    spec = {"modules": [{"id": "M1", "tasks": [
+        {"id": "M1.T1", "deliverables": ["pkg/chords.py", "pkg/metrics/__init__.py",
+                                         "pkg/__init__.py", "tests/test_x.py", "pyproject.toml"]}]}]}
+    assert declared_modules(spec, "pkg") == {"pkg.chords", "pkg.metrics", "pkg"}
+
+
+def test_skipped_count():
+    assert execlib.skipped_count("=== 50 passed, 3 skipped in 1.2s ===") == 3
+    assert execlib.skipped_count("=== 50 passed in 1.2s ===") == 0
+
+
 def test_freezelint_clean_suite(tmp_path):
     from raster.freezelint import lint_frozen_tests
     code = tmp_path / "code"

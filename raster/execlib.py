@@ -107,6 +107,14 @@ def summarize_pytest(output: str) -> str:
     return out or "(no recognizable pytest summary)"
 
 
+def skipped_count(output: str) -> int:
+    """Number of skipped tests reported in a pytest run (0 if none). A green run with skips has
+    demonstrated nothing about the skipped paths — and a skip-on-ImportError schism reports green
+    while never running once, so a nonzero skip count on a PASS is a first-class signal, not noise."""
+    m = re.search(r"\b(\d+)\s+skipped\b", output)
+    return int(m.group(1)) if m else 0
+
+
 def normalize_pytest_cmd(cmd: str) -> str:
     """Run pytest through THIS interpreter so the check uses the exact Python/site-packages
     raster is running under, instead of a bare `pytest` that may not be on PATH."""
@@ -216,7 +224,21 @@ _AUTHOR_INSTRUCTIONS = (
     "SHARED FILES are SINGLE-OWNER — author conftest.py and any shared golden/constants module "
     "ONCE, in full, only in the task that owns them. Never re-emit a shared file from another "
     "module's authoring task: a later full re-emit silently wipes the fixtures an earlier run "
-    "added (last-writer-wins). Emit only the files THIS task owns."
+    "added (last-writer-wins). Emit only the files THIS task owns.\n"
+    "NEVER SKIP ON ImportError — do NOT write `try: import <product>; except ImportError: "
+    "pytest.skip(...)`. The product is STUBBED at collect time, so it always imports; that idiom "
+    "only ever fires on a real NAME SCHISM (you imported a module name no task builds), and it "
+    "turns that schism into a PERMANENT green that never runs — the worst false-green. Import "
+    "product modules DIRECTLY, by their EXACT declared deliverable module name (if the deliverable "
+    "is `pkg/chords.py`, import `pkg.chords` — never `pkg.chord`); a wrong name must fail loudly.\n"
+    "DELEGATE, DON'T RE-STUB a pinned algorithm — when several tests need the same formula/metric, "
+    "assert against the ONE canonical product symbol everywhere; never let a second call site get a "
+    "fresh fake (a coarse tolerance lets a stub pass by luck and the real value is never checked).\n"
+    "CONSTRUCT FRAMEWORK OBJECTS THE WAY THE FRAMEWORK ALLOWS — don't instantiate a framework "
+    "subclass with a null/dummy collaborator its base class dereferences (e.g. a Mesa Agent with "
+    "model=None, an ORM model with no session): that's an UNSATISFIABLE contract no correct impl "
+    "can meet. Use a real or mock collaborator; if standalone pure-logic testing is the intent, the "
+    "PRODUCT must expose an explicit null-collaborator path and the test must rely on that contract."
 )
 
 

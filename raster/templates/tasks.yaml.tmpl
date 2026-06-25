@@ -19,9 +19,16 @@
 #     SELF-CONSISTENT, NEVER correct — keep the freeze->impl `checkpoint:` for whether goldens
 #     are RIGHT, and lean on Layer-1 guards for oracle-checkable values.
 #   * A `--collect-only` freeze gate also auto-runs `raster lint` (a cross-reference linter:
-#     unresolvable golden keys, undefined fixtures, inconsistent call signatures, AND a static
-#     spec check — e.g. an IMPLEMENT task that lists a frozen tests/ path as a deliverable) —
-#     Layer-1 defects that pass a green collect but hard-block impl. (`raster lint` runs by hand too.)
+#     unresolvable golden keys, undefined fixtures, inconsistent call signatures, skip-on-ImportError
+#     of a product module, a test importing a module no task delivers, AND a static spec check —
+#     e.g. an IMPLEMENT task that lists a frozen tests/ path as a deliverable) — Layer-1 defects that
+#     pass a green collect but hard-block impl. (`raster lint` runs by hand too.)
+#   * GREEN != VERIFIED. A test counts only if it RAN against the product. Don't author
+#     skip-on-ImportError for product modules (it turns a name schism into a permanent false-green
+#     that never runs); import product modules by their EXACT deliverable name. raster surfaces a
+#     loud warning when a gate/test PASSES with skipped tests — a nonzero skip count is a signal,
+#     not noise. The first task to CONSUME an upstream module is its real integration test; expect
+#     upstream false-greens to detonate there, not where the module was authored.
 #   * Emit deliverable PATHS RELATIVE TO code/ — NEVER prefixed with code/. The doer roots writes
 #     under code/, so a code/-prefixed path would double (code/code/...); it strips a spurious
 #     leading code/ defensively, but don't author the smell. (IMPLEMENT deliverables live under

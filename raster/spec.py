@@ -135,6 +135,29 @@ def authoring_owners(spec: dict) -> dict:
     return owners
 
 
+def declared_modules(spec: dict, package: str) -> set:
+    """The set of dotted PRODUCT module names any task declares as a deliverable, e.g.
+    `pkg/chords.py` -> `pkg.chords`, `pkg/metrics/__init__.py` -> `pkg.metrics`, `pkg/__init__.py`
+    -> `pkg`. Lets the linter prove a frozen test only imports modules some task actually builds —
+    a test importing `pkg.chord` (singular) when the deliverable is `pkg.chords` (plural) is a
+    name schism, not a pending feature, and must fail loudly rather than skip-on-ImportError."""
+    mods = set()
+    if not package:
+        return mods
+    for m in spec.get("modules", []) or []:
+        for t in m.get("tasks", []) or []:
+            for d in t.get("deliverables", []) or []:
+                rel = str(d).lstrip("/")
+                if not rel.endswith(".py"):
+                    continue
+                parts = rel[:-3].split("/")
+                if parts and parts[-1] == "__init__":
+                    parts = parts[:-1]
+                if parts and parts[0] == package:
+                    mods.add(".".join(parts))
+    return mods
+
+
 def lint_spec(spec: dict) -> list:
     """Static plan-validation (Layer-1, pre-run, zero implementation present): defects in
     tasks.yaml itself that statically guarantee a task can never satisfy its contract.
