@@ -70,6 +70,13 @@
 #     intent: the freeze->impl boundary (highest value), the conceptually-hard `strong` modules,
 #     and a final whole-system sign-off (top-level `final_checkpoint:`). NOT the boilerplate
 #     modules — impl there is self-protecting (a wrong impl fails its own frozen gate).
+#     CHECKPOINT PROTOCOL — a passing suite is not enough; tests can't see a disconnected
+#     subsystem. Make the review prompt explicitly: (1) GREP the consumer for the upstream symbols
+#     it's supposed to call (a metric/agent/policy imported by nothing means it was bypassed and
+#     reimplemented inline); (2) WIGGLE each headline parameter and confirm the output moves (a
+#     dead knob passes every invariant test); (3) judge DOMAIN FIDELITY — a green, plausible impl
+#     can still be wrong on domain grounds (relocating to the 'best' slot when the spec demands a
+#     random one); only the domain owner can sign that off, so state the intent in the task.
 
 orchestration:
   task:    {advance_on: unit_test_pass, on_fail: block_next_task}
@@ -165,4 +172,8 @@ modules: []
 # # Optional whole-system sign-off after the last module (a [human, claude] null-command task):
 # final_checkpoint: >
 #   Claude — run the whole system end-to-end and confirm nothing drifted across modules.
-#   Spot-check that each module still honours its gate's intent (not just its letter). Go/no-go.
+#   Spot-check that each module still honours its gate's intent (not just its letter).
+#   Run `raster lint` and resolve any ISLAND (a delivered module imported by nothing = a
+#   subsystem the consumer bypassed). For each headline parameter, WIGGLE it and confirm the
+#   run output moves (a dead knob passes every invariant test). Grep each consumer for the
+#   upstream symbols it should call. Confirm domain fidelity, not just green. Go/no-go.

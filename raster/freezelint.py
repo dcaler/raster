@@ -16,6 +16,9 @@ Checks (each maps to an observed defect class):
     "not built yet" so a schism fails loudly instead.
   * module-import resolvability — every product module a frozen test imports must correspond to a
     declared deliverable module (caught `import chord` when the deliverable was `chords`).
+  * dead-module reachability (lint_dead_modules) — a delivered product module that exists but is
+    imported by no other product module is an island: dead code or a subsystem the consumer
+    bypassed (reimplemented inline). A whole-system check; self-limits to modules already built.
   * golden-key resolvability  — a literal subscript NAME["lit"] into a golden dict whose
     literal keys we can see must have "lit" among them (caught a note-name vs Roman schism).
   * fixture resolvability     — every fixture a test/fixture requests is defined somewhere
@@ -155,6 +158,107 @@ def _product_symbols(trees: dict, package: str) -> set:
     return syms
 
 
+def _container_parts(rel_parts: tuple) -> tuple:
+    """The dotted PACKAGE that contains a product file (for resolving relative imports):
+    pkg/a.py -> ('pkg',), pkg/__init__.py -> ('pkg',), pkg/sub/b.py -> ('pkg','sub')."""
+    parts = rel_parts[:-1] if rel_parts and rel_parts[-1] == "__init__" else rel_parts[:-1]
+    return parts
+
+
+def _product_imports(code, package: str) -> set:
+    """Every product module referenced by an import anywhere in the package source (absolute or
+    relative). Used to find ISLANDS: a delivered module imported by nothing is dead code or a
+    subsystem the consumer silently bypassed. Over-marking reachable is safe (fewer false islands),
+    so `from pkg import x` marks the candidate submodule pkg.x too."""
+    referenced = set()
+    pkg_root = code / package
+    if not pkg_root.is_dir():
+        return referenced
+    for f in sorted(pkg_root.rglob("*.py")):
+        try:
+            tree = ast.parse(f.read_text(), filename=str(f))
+        except SyntaxError:
+            continue
+        container = _container_parts(f.relative_to(code).with_suffix("").parts)
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                for n in node.names:
+                    if n.name == package or n.name.startswith(package + "."):
+                        referenced.add(n.name)
+            elif isinstance(node, ast.ImportFrom):
+                if node.level == 0 and node.module:
+                    if node.module == package:
+                        for n in node.names:
+                            referenced.add(f"{package}.{n.name}")
+                    elif node.module.startswith(package + "."):
+                        referenced.add(node.module)
+                        for n in node.names:
+                            referenced.add(f"{node.module}.{n.name}")
+                elif node.level > 0:                    # relative: resolve against the container
+                    base = container[:len(container) - (node.level - 1)]
+                    if not base or base[0] != package:
+                        continue
+                    if node.module:
+                        referenced.add(".".join((*base, node.module)))
+                        for n in node.names:
+                            referenced.add(".".join((*base, node.module, n.name)))
+                    else:
+                        for n in node.names:            # from . import sibling
+                            referenced.add(".".join((*base, n.name)))
+    return referenced
+
+
+def _module_file(code, dotted: str):
+    rel = dotted.replace(".", "/")
+    for cand in (code / (rel + ".py"), code / rel / "__init__.py"):
+        if cand.is_file():
+            return cand
+    return None
+
+
+def _is_entrypoint(path) -> bool:
+    """A module that's legitimately unimported by siblings: a __main__ module, or one with an
+    `if __name__ == '__main__':` guard (a CLI / runnable entrypoint)."""
+    if path.name == "__main__.py":
+        return True
+    try:
+        tree = ast.parse(path.read_text(), filename=str(path))
+    except SyntaxError:
+        return False
+    for node in tree.body:
+        if isinstance(node, ast.If):
+            t = node.test
+            if (isinstance(t, ast.Compare) and isinstance(t.left, ast.Name)
+                    and t.left.id == "__name__"
+                    and any(_const_str(c) == "__main__" for c in t.comparators)):
+                return True
+    return False
+
+
+def lint_dead_modules(code, package: str, spec: dict) -> list:
+    """Static reachability: a delivered PRODUCT module that exists on disk but is imported by no
+    other product module (and isn't the package root or an entrypoint) is an ISLAND — dead code, or
+    a subsystem the consumer reimplemented inline instead of calling (a dead-feature false-green:
+    the island ships green over its own tests while wired to nothing). A whole-system / by-hand
+    check — it self-limits to modules that already exist, so it's a no-op mid-freeze."""
+    declared = declared_modules(spec, package) if spec else set()
+    if not declared:
+        return []
+    referenced = _product_imports(code, package)
+    violations = []
+    for dotted in sorted(declared):
+        if dotted == package:                           # the package root is legitimately unimported
+            continue
+        f = _module_file(code, dotted)
+        if f is None or dotted in referenced or _is_entrypoint(f):
+            continue
+        violations.append(
+            f"{dotted}: delivered product module is imported by NO other product module — an "
+            f"island. Either dead code, or a subsystem the consumer bypassed (reimplemented inline "
+            f"instead of importing it). Wire it into its consumer, or remove the deliverable.")
+    return violations
+
+
 def lint_frozen_tests(code, package: str, spec: dict = None) -> list:
     """Return a list of human-readable cross-reference violations (empty == clean). When `spec`
     is given, also checks that every product module a test imports is a declared deliverable."""
@@ -272,7 +376,8 @@ def lint_frozen_tests(code, package: str, spec: dict = None) -> list:
 def run_lint(args) -> int:
     project = load_project(args.dir)
     violations = (lint_spec(project.spec)
-                  + lint_frozen_tests(project.code, project.package, project.spec))
+                  + lint_frozen_tests(project.code, project.package, project.spec)
+                  + lint_dead_modules(project.code, project.package, project.spec))
     if not violations:
         print("[raster lint] frozen-test cross-reference: clean")
         return 0

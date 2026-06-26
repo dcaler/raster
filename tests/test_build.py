@@ -183,6 +183,49 @@ def test_skipped_count():
     assert execlib.skipped_count("=== 50 passed in 1.2s ===") == 0
 
 
+def test_lint_dead_modules_flags_islands(tmp_path):
+    from raster.freezelint import lint_dead_modules
+    code = tmp_path / "code"
+    pkg = code / "pkg"
+    pkg.mkdir(parents=True)
+    (pkg / "__init__.py").write_text("from pkg.model import Model\n")  # public API re-export
+    (pkg / "model.py").write_text("from pkg.metrics import jaccard\n")  # imports metrics
+    (pkg / "metrics.py").write_text("def jaccard(a, b):\n    return 0.0\n")  # consumed -> live
+    (pkg / "policy.py").write_text("def relocate():\n    pass\n")      # imported by NOBODY -> island
+    (pkg / "cli.py").write_text("if __name__ == '__main__':\n    print('go')\n")  # entrypoint -> ok
+    spec = {"meta": {"package": "pkg"}, "modules": [{"id": "M1", "tasks": [
+        {"id": "M1.T1", "deliverables": ["pkg/__init__.py", "pkg/model.py", "pkg/metrics.py",
+                                         "pkg/policy.py", "pkg/cli.py"]}]}]}
+    v = "\n".join(lint_dead_modules(code, "pkg", spec))
+    assert "pkg.policy" in v and "island" in v          # delivered, exists, imported by nothing
+    assert "pkg.metrics" not in v                        # imported by model -> not flagged
+    assert "pkg.model" not in v                          # re-exported by the package root __init__
+    assert "pkg.cli" not in v                             # __main__ entrypoint excluded
+    assert "pkg:" not in v and "pkg " not in v           # package root never flagged
+
+
+def test_lint_dead_modules_noop_when_unbuilt(tmp_path):
+    from raster.freezelint import lint_dead_modules
+    code = tmp_path / "code"
+    (code / "pkg").mkdir(parents=True)                    # declared but no module files on disk
+    spec = {"meta": {"package": "pkg"}, "modules": [{"id": "M1", "tasks": [
+        {"id": "M1.T1", "deliverables": ["pkg/model.py", "pkg/metrics.py"]}]}]}
+    assert lint_dead_modules(code, "pkg", spec) == []     # self-limits to existing modules
+
+
+def test_lint_dead_modules_relative_import(tmp_path):
+    from raster.freezelint import lint_dead_modules
+    code = tmp_path / "code"
+    pkg = code / "pkg"
+    pkg.mkdir(parents=True)
+    (pkg / "__init__.py").write_text("from .model import Model\n")    # re-export keeps model live
+    (pkg / "model.py").write_text("from . import metrics\n")          # relative sibling import
+    (pkg / "metrics.py").write_text("def jaccard(a, b):\n    return 0.0\n")
+    spec = {"meta": {"package": "pkg"}, "modules": [{"id": "M1", "tasks": [
+        {"id": "M1.T1", "deliverables": ["pkg/__init__.py", "pkg/model.py", "pkg/metrics.py"]}]}]}
+    assert lint_dead_modules(code, "pkg", spec) == []     # relative import marks metrics reachable
+
+
 def test_freezelint_clean_suite(tmp_path):
     from raster.freezelint import lint_frozen_tests
     code = tmp_path / "code"
