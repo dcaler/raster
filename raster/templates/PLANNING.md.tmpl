@@ -91,8 +91,9 @@ in `tasks.yaml`. Rules that make a spec **valid** (get these right or the build 
   not-yet-built product so `--collect-only` passes; that says nothing about whether the goldens
   are right. The generated **freeze gate** additionally runs `raster lint` (a cross-reference
   linter: unresolvable golden keys, undefined fixtures, inconsistent call signatures, half-matrix
-  golden tables looked up by free `(a,b)`) — but value- and intent-correctness still need the
-  freeze→impl `checkpoint:` and Layer-1 guards (Step 3b).
+  golden tables looked up by free `(a,b)`, per-step monotonicity/dip-count gates on `np.diff` of a
+  stochastic trend) — but value- and intent-correctness still need the freeze→impl `checkpoint:`
+  and Layer-1 guards (Step 3b).
 - **Green ≠ verified — design so every frozen test actually RUNS against the product.** Don't
   author `try: import <product>; except ImportError: pytest.skip(...)`: the product is stubbed at
   collect time, so that idiom only fires on a real name schism and converts it into a permanent
@@ -119,6 +120,17 @@ in `tasks.yaml`. Rules that make a spec **valid** (get these right or the build 
   full table). And when a worker fails on the **byte-identical** value across an escalation, raster
   aborts to a human oracle check — a stable wrong value is a correct computation against a wrong
   *expectation*, so fix the frozen golden, not the impl.
+- **A trend gate must assert the property the dynamic actually guarantees.** A gate that asserts an
+  observable improves at (almost) *every* step (`np.all(np.diff(trend) >= 0)`, or a hard dip-count
+  cap `np.sum(diff < -eps) <= N`) encodes a *best-improving* dynamic. If the frozen update rule is
+  stochastic/non-greedy (faithful random Schelling relocation, ε-explore, annealing), the metric
+  only **drifts** upward — per-step dips are expected, so the gate *false-reds* a correct impl, and
+  a small seed-average can't smooth a random walk into monotonicity (a dip-count cap just makes the
+  verdict flip with the seed list). Assert the guaranteed property instead: a **net** rise with a
+  domain margin **plus** up-steps outnumbering down-steps (count-vs-count), or a
+  final-state-vs-random-baseline distribution test; `raster lint` flags the per-step form, and the
+  checkpoint should seed-smoke-test any stochastic gate against a disjoint seed list. Only the
+  domain owner can say whether near-monotonicity is even *supposed* to hold — state the intent.
 - **`depends_on`** encodes the DAG; `raster queue` linearizes it into a single-parent
   trundlr chain, so a failure auto-blocks everything downstream. Order tasks so each
   depends on what it actually needs.

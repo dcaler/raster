@@ -270,7 +270,22 @@ _AUTHOR_INSTRUCTIONS = (
     "non-reflexive pseudo-metric. Either author the golden as a FULL symmetric table WITH diagonal "
     "(generate + consistency-check it once), or — where test independence isn't the point — call the "
     "ONE canonical product metric. A bespoke lambda over a half-matrix re-implements 'be a metric' "
-    "and gets it wrong invisibly (the stubbed collect can't see it; impl can't satisfy it)."
+    "and gets it wrong invisibly (the stubbed collect can't see it; impl can't satisfy it).\n"
+    "DON'T ASSERT PER-STEP MONOTONICITY ON A STOCHASTIC PROCESS. Before writing a gate of the form "
+    "'metric improves each step' — `np.all(np.diff(trend) >= 0)`, `np.sum(np.diff(trend) < -eps) <= "
+    "N` — check the update rule you froze. If it's stochastic or non-greedy (random relocation, "
+    "ε-exploration, simulated annealing), the observable only DRIFTS upward: it rises in expectation "
+    "over a whole run, but individual step-to-step diffs go negative routinely, so per-step "
+    "monotonicity tests for a BEST-IMPROVING dynamic you didn't build and a correct impl fails it. A "
+    "small seed-average won't rescue it (a few seeds never smooth a random walk into monotonicity) "
+    "and a hard dip-count cap just makes the verdict depend on which seeds you picked. Assert the "
+    "property the process actually GUARANTEES: a robust NET rise over the run (trend[-1]-trend[0] >= "
+    "a domain margin) PLUS up-steps OUTNUMBERING down-steps (np.sum(diff > eps) > np.sum(diff < "
+    "-eps) — count-vs-count, never count-vs-constant), or a final-state-vs-random-baseline "
+    "distribution test. Separate 'did the feature work' (the net/distributional claim — assert it) "
+    "from 'is the trajectory shaped how I imagined' (the per-step picture in your head — don't). "
+    "Then SEED-SMOKE-TEST it: re-run the gate with a disjoint seed list (seeds = [s + 100 for s in "
+    "seeds]); if the verdict flips, the gate measures the seed list, not the model."
 )
 
 

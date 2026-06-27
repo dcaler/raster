@@ -21,8 +21,9 @@
 #   * A `--collect-only` freeze gate also auto-runs `raster lint` (a cross-reference linter:
 #     unresolvable golden keys, undefined fixtures, inconsistent call signatures, skip-on-ImportError
 #     of a product module, a test importing a module no task delivers, a half-matrix golden table
-#     looked up by free (a,b), AND a static spec check — e.g. an IMPLEMENT task that lists a frozen
-#     tests/ path as a deliverable) — Layer-1 defects that pass a green collect but hard-block impl.
+#     looked up by free (a,b), a per-step monotonicity/dip-count gate on np.diff of a (stochastic)
+#     trend, AND a static spec check — e.g. an IMPLEMENT task that lists a frozen tests/ path as a
+#     deliverable) — Layer-1 defects that pass a green collect but hard-block (or falsely red) impl.
 #     (`raster lint` runs by hand too.)
 #   * ORACLE-INTERNAL CONSISTENCY: a frozen test can hand-compute an expected value under ASSUMED
 #     properties of a helper it builds from a golden table, and the value + the helper silently
@@ -31,6 +32,18 @@
 #     that isn't one). Make fixtures ROUND-TRIP their goldens (a 3-line self-check asserting the
 #     adapter is reflexive + symmetric before any value trusts it); store symmetric relations as a
 #     FULL table with diagonal, not a de-duplicated half-matrix used as a runtime (a,b) function.
+#   * STOCHASTIC GATES ASSERT WHAT THE PROCESS GUARANTEES, NOT THE TRAJECTORY YOU PICTURED: a gate
+#     that asserts an observable improves at (almost) EVERY step (np.all(np.diff(trend) >= 0), or a
+#     hard dip-count cap np.sum(diff < -eps) <= N) is testing for a BEST-IMPROVING dynamic. If the
+#     frozen update rule is stochastic/non-greedy (faithful random Schelling relocation, ε-explore,
+#     annealing), the metric only DRIFTS upward — per-step dips are expected texture, so the gate
+#     false-REDs a correct impl (SchellingChords G5: `3 <= 1`). A small seed-average can't smooth a
+#     random walk into monotonicity, and a dip-count cap just makes the verdict flip with the seed
+#     list. Assert the guaranteed property: a NET rise with a domain margin PLUS up-steps outnumber
+#     down-steps (count-vs-count), or a final-state-vs-random-baseline distribution test; raster lint
+#     flags the per-step form. Separate "did the feature work" (assert it) from "is the path shaped
+#     how I imagined" (don't). The domain owner decides whether near-monotonicity is even supposed to
+#     hold — only they know if a dip is a model bug or stochastic noise.
 #   * PLATEAU = ORACLE BUG, NOT A DUMB WORKER: when a worker fails on the byte-identical value across
 #     an escalation (a stronger rung reproduces it), raster ABORTS the task to a human oracle check
 #     instead of burning the budget — a stable wrong value is a correct computation against a wrong
@@ -91,7 +104,11 @@
 #     random one); only the domain owner can sign that off, so state the intent in the task; (4) at
 #     the FREEZE checkpoint, ROUND-TRIP each hand-computed golden through the helper it's computed
 #     under — assert the metric/adapter actually has the assumed properties (reflexive m(x,x)==0,
-#     symmetric m(a,b)==m(b,a)) so the value and the helper can't silently disagree.
+#     symmetric m(a,b)==m(b,a)) so the value and the helper can't silently disagree; (5) for any
+#     gate that asserts a TREND (a metric improving over a run), check it against the FROZEN update
+#     rule — if the rule is stochastic/non-greedy, a per-step monotonicity or dip-count assertion is
+#     the wrong contract (only net/majority/distributional claims hold), and seed-smoke-test it
+#     against a disjoint seed list so the verdict can't depend on which seeds were picked.
 
 orchestration:
   task:    {advance_on: unit_test_pass, on_fail: block_next_task}

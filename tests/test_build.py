@@ -212,6 +212,45 @@ def test_freezelint_full_symmetric_table_clean(tmp_path):
     assert lint_frozen_tests(code, "pkg") == []           # reflexive + symmetric -> no false positive
 
 
+def test_freezelint_stochastic_per_step_gate(tmp_path):
+    from raster.freezelint import lint_frozen_tests
+    code = tmp_path / "code"
+    tests = code / "tests"
+    tests.mkdir(parents=True)
+    # The G5 fingerprint: per-step monotonicity / dip-count threshold on np.diff of a trend.
+    (tests / "gate_obs.py").write_text(
+        "import numpy as np\n"
+        "AVG_TREND = np.array([0.1, 0.2, 0.15, 0.3])\n"
+        "def test_dip_count():\n"
+        "    diffs = np.diff(AVG_TREND)\n"
+        "    assert np.sum(diffs < -1e-6) <= 1\n"            # dip-count vs constant -> flagged
+        "def test_monotone():\n"
+        "    assert np.all(np.diff(AVG_TREND) >= 0)\n")      # per-step all() monotone -> flagged
+    viols = lint_frozen_tests(code, "pkg")
+    assert any("dip-count threshold" in v for v in viols)
+    assert any("per-step monotonicity" in v for v in viols)
+    assert len(viols) == 2                                   # exactly the two smells, nothing else
+
+
+def test_freezelint_distributional_gate_clean(tmp_path):
+    from raster.freezelint import lint_frozen_tests
+    code = tmp_path / "code"
+    tests = code / "tests"
+    tests.mkdir(parents=True)
+    # The RECOMMENDED encoding: net rise + majority-up (count-vs-COUNT, not count-vs-constant).
+    # Neither np.sum(diffs) (a net total, no sign-compare) nor a count-vs-count is the smell.
+    (tests / "gate_obs.py").write_text(
+        "import numpy as np\n"
+        "AVG_TREND = np.array([0.1, 0.2, 0.15, 0.31])\n"
+        "def test_net_rise():\n"
+        "    assert AVG_TREND[-1] - AVG_TREND[0] >= 0.05\n"   # net rise, no np.diff -> clean
+        "def test_majority_up():\n"
+        "    diffs = np.diff(AVG_TREND)\n"
+        "    assert np.sum(diffs > 1e-6) > np.sum(diffs < -1e-6)\n"  # count-vs-count -> clean
+        "    assert np.sum(diffs) >= 0.05\n")                 # sum of diffs (net), not a sign-count -> clean
+    assert lint_frozen_tests(code, "pkg") == []
+
+
 def test_failure_signature():
     out = ("tests/test_seg.py::test_seg FAILED\n"
            "    def test_seg():\n"

@@ -25,6 +25,11 @@ Checks (each maps to an observed defect class):
     once, no diagonal) but used as a runtime lookup keyed by free (a,b) is a non-reflexive,
     asymmetric pseudo-metric: no correct impl can satisfy a value hand-computed under a REAL
     metric (caught segregation_index == 0.0833 vs an expected 0.8 over a half-matrix adapter).
+  * stochastic per-step gate  — a per-step monotonicity / dip-count assertion on np.diff of a
+    trend (`all(diff >= 0)`, `np.sum(diff < -eps) <= 1`) tests for a BEST-IMPROVING dynamic; on a
+    stochastic/non-greedy update rule the observable only drifts upward, so the per-step claim is
+    false and a small seed-average just makes the verdict seed-dependent (caught G5's `3 <= 1`). A
+    smell the human adjudicates — flag it; the count-vs-count majority test is excluded.
   * fixture resolvability     — every fixture a test/fixture requests is defined somewhere
     (conftest or a test module) or is a pytest builtin (caught a fixture defined nowhere).
   * call-signature coherence  — a product symbol must not be called positionally in one file
@@ -156,6 +161,70 @@ def _pair_lookup(node):
           and isinstance(node.args[0], ast.Tuple) and len(node.args[0].elts) == 2):
         return node.func.value.id, node.args[0]
     return None, None
+
+
+# ordering / equality comparisons — the ops that make a per-step "sign of the difference" test.
+_ORDER_OPS = (ast.Lt, ast.LtE, ast.Gt, ast.GtE, ast.Eq, ast.NotEq)
+
+
+def _is_diff_call(node) -> bool:
+    """A discrete first-difference: `np.diff(x)` / `numpy.diff(x)` / `series.diff()` — anything
+    `.diff(...)`. The per-step trend whose sign is the stochastic-monotonicity trap."""
+    return (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "diff")
+
+
+def _diff_source_names(tree) -> set:
+    """Names bound to a `np.diff(...)` result anywhere in the tree (`diffs = np.diff(avg_trend)`)."""
+    names = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign) and _is_diff_call(node.value):
+            for t in node.targets:
+                if isinstance(t, ast.Name):
+                    names.add(t.id)
+    return names
+
+
+def _refs_diff(node, diff_names: set) -> bool:
+    """`node` references a first-difference: a name bound to np.diff, or an inline np.diff(...)."""
+    for n in ast.walk(node):
+        if isinstance(n, ast.Name) and n.id in diff_names:
+            return True
+        if _is_diff_call(n):
+            return True
+    return False
+
+
+def _reduction(node):
+    """If `node` is a reduction CALL, return (name, [reduced exprs]); else (None, []). Handles both
+    `np.all(EXPR)` / `sum(EXPR)` (function form -> args) and `(EXPR).all()` / `arr.sum()` (method
+    form -> the receiver is the reduced expression)."""
+    if not isinstance(node, ast.Call):
+        return None, []
+    f = node.func
+    if isinstance(f, ast.Attribute):
+        return f.attr, [f.value, *node.args]        # receiver (EXPR in (EXPR).all()) + any args
+    if isinstance(f, ast.Name):
+        return f.id, list(node.args)
+    return None, []
+
+
+def _has_diff_sign_compare(exprs, diff_names: set) -> bool:
+    """Any of `exprs` contains an ordering/equality Compare over a first-difference — a per-step
+    SIGN test on the discrete differences (`diff > 0`, `diff < -eps`, `diff >= 0`)."""
+    for e in exprs:
+        for n in ast.walk(e):
+            if (isinstance(n, ast.Compare) and any(isinstance(op, _ORDER_OPS) for op in n.ops)
+                    and _refs_diff(n, diff_names)):
+                return True
+    return False
+
+
+def _is_diff_sign_count(node, diff_names: set) -> bool:
+    """A COUNT of per-step sign-violations: `np.sum(diff < -eps)` / `(diff < 0).sum()` /
+    `np.count_nonzero(diff < 0)` — a sum/count reduction over a diff sign-comparison."""
+    name, exprs = _reduction(node)
+    return name in ("sum", "count_nonzero") and _has_diff_sign_compare(exprs, diff_names)
 
 
 def _catches_import_error(handler: ast.ExceptHandler) -> bool:
@@ -399,6 +468,51 @@ def lint_frozen_tests(code, package: str, spec: dict = None) -> list:
                     f"metric). A value hand-computed under a real metric is then UNSATISFIABLE. "
                     f"Pre-expand {name} to a full symmetric table with diagonal, or wrap the lookup "
                     f"in a reflexive + two-order adapter.")
+
+    # per-step monotonicity / dip-count threshold on np.diff of a (likely stochastic) trend.
+    # Asserting the metric improves at (almost) EVERY step is a BEST-IMPROVING signature; on a
+    # stochastic / non-greedy update rule (faithful random Schelling relocation) the observable only
+    # DRIFTS upward and per-step dips are expected, so the assertion is false against a correct impl
+    # (SchellingChords G5: `np.sum(diff < -1e-6) <= 1` failed `3 <= 1` on a correct model). A SMELL
+    # the human adjudicates (only the domain owner knows if a dip is a bug or stochastic texture) —
+    # flag the fingerprint; recommend the property the process actually guarantees.
+    for f, tree in trees.items():
+        if isinstance(tree, SyntaxError):
+            continue
+        diff_names = _diff_source_names(tree)
+        for node in ast.walk(tree):
+            # (1) all()/any() over a per-step sign comparison -> per-step monotonicity claim.
+            red, exprs = _reduction(node)
+            if red in ("all", "any") and _has_diff_sign_compare(exprs, diff_names):
+                violations.append(
+                    f"{f.name}:{node.lineno}: per-step monotonicity assertion on np.diff(...) — "
+                    f"`{red}(diff <sign> …)` claims the metric improves at (almost) EVERY step, the "
+                    f"signature of a BEST-IMPROVING/hill-climbing dynamic. If the update rule is "
+                    f"stochastic or non-greedy (random relocation, ε-exploration, annealing) the "
+                    f"observable only DRIFTS upward and per-step dips are expected, so this is false "
+                    f"against a correct impl. Confirm the dynamic is genuinely monotone; else assert "
+                    f"the property it guarantees — net rise with a margin (trend[-1]-trend[0] >= m) "
+                    f"plus up-steps OUTNUMBERING down-steps, or a final-vs-baseline distribution "
+                    f"test — and smoke-test the gate against a disjoint seed list.")
+            # (2) a dip COUNT compared to a CONSTANT threshold: np.sum(diff < -eps) <= 1. The
+            #     recommended majority test compares two diff-COUNTS to each other (not a constant),
+            #     so requiring a numeric-literal side excludes the good pattern.
+            if isinstance(node, ast.Compare) and any(isinstance(op, _ORDER_OPS) for op in node.ops):
+                sides = [node.left, *node.comparators]
+                counts = [s for s in sides if _is_diff_sign_count(s, diff_names)]
+                consts = [s for s in sides if isinstance(s, ast.Constant)
+                          and isinstance(s.value, (int, float)) and not isinstance(s.value, bool)]
+                if counts and consts:
+                    violations.append(
+                        f"{f.name}:{node.lineno}: hard dip-count threshold on np.diff(...) — "
+                        f"counting per-step sign-violations and comparing to a constant "
+                        f"(`np.sum(diff < -eps) <= N`). On an averaged-but-still-stochastic "
+                        f"observable the dip COUNT is seed-dependent: a few seeds never smooth a "
+                        f"random walk into monotonicity, so the verdict flips with the seed list and "
+                        f"the gate measures the seeds, not the model. Replace with a distributional "
+                        f"claim the process guarantees — net rise + up-steps outnumber down-steps "
+                        f"(count-vs-count, not count-vs-constant), or a final-state-vs-baseline test "
+                        f"— and re-run with a disjoint seed list to prove the verdict is stable.")
 
     # fixtures: collect all definitions first, then check every request resolves
     defined = set(PYTEST_BUILTIN_FIXTURES)
