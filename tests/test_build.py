@@ -183,6 +183,50 @@ def test_skipped_count():
     assert execlib.skipped_count("=== 50 passed in 1.2s ===") == 0
 
 
+def test_freezelint_half_matrix_lookup(tmp_path):
+    from raster.freezelint import lint_frozen_tests
+    code = tmp_path / "code"
+    tests = code / "tests"
+    tests.mkdir(parents=True)
+    # DISTANCES is a half-matrix: one order per pair, no diagonal. Looked up by free (a,b) it is a
+    # non-reflexive, asymmetric pseudo-metric -> any value computed under a real metric is unsatisfiable.
+    (tests / "test_seg.py").write_text(
+        'DISTANCES = {("C", "Em"): 0.5, ("C", "G"): 0.8}\n'
+        "def metric(a, b):\n    return DISTANCES.get((a, b), 1.0)\n"     # free-var lookup -> flagged
+        'def test_known():\n    assert DISTANCES[("C", "Em")] == 0.5\n')  # constant key -> NOT flagged
+    viols = [x for x in lint_frozen_tests(code, "pkg") if "HALF-MATRIX" in x]
+    assert len(viols) == 1 and "DISTANCES" in viols[0]    # ONLY the free-var (a,b) .get is flagged
+    assert ":3:" in viols[0]                               # the constant-key subscript was not flagged
+
+
+def test_freezelint_full_symmetric_table_clean(tmp_path):
+    from raster.freezelint import lint_frozen_tests
+    code = tmp_path / "code"
+    tests = code / "tests"
+    tests.mkdir(parents=True)
+    # A FULL symmetric table with diagonal IS a total metric -> a free-var lookup is safe, not flagged.
+    (tests / "test_seg.py").write_text(
+        'D = {("C","C"): 0.0, ("Em","Em"): 0.0, ("C","Em"): 0.5, ("Em","C"): 0.5}\n'
+        "def metric(a, b):\n    return D.get((a, b), 1.0)\n"
+        "def test_x():\n    assert metric('C', 'C') == 0.0\n")
+    assert lint_frozen_tests(code, "pkg") == []           # reflexive + symmetric -> no false positive
+
+
+def test_failure_signature():
+    out = ("tests/test_seg.py::test_seg FAILED\n"
+           "    def test_seg():\n"
+           ">       assert segregation_index(g, metric) == 0.8\n"
+           "E       assert 0.0833 == 0.8\n"
+           "FAILED tests/test_seg.py::test_seg - assert 0.0833 == 0.8\n"
+           "=== 1 failed in 0.3s ===\n")
+    sig = execlib.failure_signature(out)
+    assert "0.0833 == 0.8" in sig                          # carries the concrete value
+    assert "0.3s" not in sig and "def test_seg" not in sig # drops volatile timing / source context
+    # byte-stable across runs that differ only in timing -> a repeat IS an oracle-bug plateau signal
+    assert sig == execlib.failure_signature(out.replace("0.3s", "1.7s"))
+    assert execlib.failure_signature("=== 5 passed in 0.1s ===") == ""
+
+
 def test_lint_dead_modules_flags_islands(tmp_path):
     from raster.freezelint import lint_dead_modules
     code = tmp_path / "code"

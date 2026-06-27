@@ -20,9 +20,21 @@
 #     are RIGHT, and lean on Layer-1 guards for oracle-checkable values.
 #   * A `--collect-only` freeze gate also auto-runs `raster lint` (a cross-reference linter:
 #     unresolvable golden keys, undefined fixtures, inconsistent call signatures, skip-on-ImportError
-#     of a product module, a test importing a module no task delivers, AND a static spec check —
-#     e.g. an IMPLEMENT task that lists a frozen tests/ path as a deliverable) — Layer-1 defects that
-#     pass a green collect but hard-block impl. (`raster lint` runs by hand too.)
+#     of a product module, a test importing a module no task delivers, a half-matrix golden table
+#     looked up by free (a,b), AND a static spec check — e.g. an IMPLEMENT task that lists a frozen
+#     tests/ path as a deliverable) — Layer-1 defects that pass a green collect but hard-block impl.
+#     (`raster lint` runs by hand too.)
+#   * ORACLE-INTERNAL CONSISTENCY: a frozen test can hand-compute an expected value under ASSUMED
+#     properties of a helper it builds from a golden table, and the value + the helper silently
+#     disagree — both look authoritative, yet no correct impl satisfies the value (segregation_index
+#     == 0.0833 vs an expected 0.8: the value assumed a real metric, the adapter was a half-matrix
+#     that isn't one). Make fixtures ROUND-TRIP their goldens (a 3-line self-check asserting the
+#     adapter is reflexive + symmetric before any value trusts it); store symmetric relations as a
+#     FULL table with diagonal, not a de-duplicated half-matrix used as a runtime (a,b) function.
+#   * PLATEAU = ORACLE BUG, NOT A DUMB WORKER: when a worker fails on the byte-identical value across
+#     an escalation (a stronger rung reproduces it), raster ABORTS the task to a human oracle check
+#     instead of burning the budget — a stable wrong value is a correct computation against a wrong
+#     EXPECTATION. Design goldens so this can't happen; when it does, fix the frozen value, not the impl.
 #   * GREEN != VERIFIED. A test counts only if it RAN against the product. Don't author
 #     skip-on-ImportError for product modules (it turns a name schism into a permanent false-green
 #     that never runs); import product modules by their EXACT deliverable name. raster surfaces a
@@ -76,7 +88,10 @@
 #     reimplemented inline); (2) WIGGLE each headline parameter and confirm the output moves (a
 #     dead knob passes every invariant test); (3) judge DOMAIN FIDELITY — a green, plausible impl
 #     can still be wrong on domain grounds (relocating to the 'best' slot when the spec demands a
-#     random one); only the domain owner can sign that off, so state the intent in the task.
+#     random one); only the domain owner can sign that off, so state the intent in the task; (4) at
+#     the FREEZE checkpoint, ROUND-TRIP each hand-computed golden through the helper it's computed
+#     under — assert the metric/adapter actually has the assumed properties (reflexive m(x,x)==0,
+#     symmetric m(a,b)==m(b,a)) so the value and the helper can't silently disagree.
 
 orchestration:
   task:    {advance_on: unit_test_pass, on_fail: block_next_task}
@@ -152,8 +167,10 @@ modules: []
 #     # code builds on it (collection passing says nothing about whether the goldens are RIGHT).
 #     checkpoint: >
 #       Claude — review the entire frozen Phase-0 suite before any implementation starts.
-#       Check: (1) golden values are internally consistent and match design intent;
-#       (2) the model shape matches DESIGN.md (not a hallucinated alternative);
+#       Check: (1) golden values are internally consistent and match design intent — for any value
+#       hand-computed under assumed properties of a helper built from a golden table, round-trip it
+#       (assert the metric/adapter is reflexive + symmetric; no half-matrix used as a runtime (a,b)
+#       function); (2) the model shape matches DESIGN.md (not a hallucinated alternative);
 #       (3) every downstream-consumed identifier/constant is named as the guards expect.
 #       Flag issues as file:line; end with a go/no-go.
 #     tasks:

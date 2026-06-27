@@ -87,6 +87,7 @@ def run_build(args) -> int:
     log(f"  ollama={host}  test_cmd={unit_cmd!r}  cwd={project.code}")
     messages = [{"role": "user", "content": prompt}]
 
+    prev_sig = None     # last attempt's failure signature, for oracle-bug plateau detection
     for attempt in range(1, max_attempts + 1):
         idx = rung_index(start, attempt, ESCALATE_AFTER, len(ladder))
         worker_key, think = resolve_rung(ladder, idx, task, authoring, project.meta)
@@ -136,6 +137,24 @@ def run_build(args) -> int:
                 f"test bug — aborting rather than burning the repair budget on an unsatisfiable "
                 f"loop. Check that `raster` is importable on PYTHONPATH for the test subprocess.")
             return 1
+
+        if not authoring and idx > start:
+            # Oracle-bug plateau: a STRONGER rung reproduced the byte-identical failing value a
+            # weaker one already produced. Climbing the ladder didn't move it, so this is a
+            # deterministic correct computation against a WRONG expected value (a frozen-test oracle
+            # bug), not a coding failure. Stop early — the remaining budget can't repair the test.
+            sig = execlib.failure_signature(output)
+            if sig and sig == prev_sig:
+                log(f"FAILED build={args.task}: STABLE failing value across an escalation — a "
+                    f"stronger model reproduced the byte-identical failure, so the ladder can't fix "
+                    f"it. This is the signature of a correct computation against a WRONG expected "
+                    f"value (an oracle bug in the frozen test), not a worker coding failure. Aborting "
+                    f"to a HUMAN ORACLE CHECK rather than burning the remaining attempts. "
+                    f"Signature:\n    {sig.replace(chr(10), chr(10) + '    ')}")
+                return 1
+            prev_sig = sig
+        elif not authoring:
+            prev_sig = execlib.failure_signature(output)
 
         if authoring:
             fix = ("These are pytest COLLECTION errors in the TEST files you wrote — the tests "

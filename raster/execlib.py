@@ -115,6 +115,17 @@ def skipped_count(output: str) -> int:
     return int(m.group(1)) if m else 0
 
 
+def failure_signature(output: str) -> str:
+    """The STABLE assertion/error lines of a failing pytest run — pytest's `E   ...` detail and
+    `FAILED ...` short-summary lines, which carry the concrete value (`assert 0.0833 == 0.8`) but
+    not volatile paths/timings. A signature that repeats UNCHANGED as the ladder climbs to a
+    stronger model is the signature of a deterministic, correct computation against a WRONG expected
+    value — an oracle bug in the frozen test, not a coding failure the worker can repair."""
+    lines = [l.strip() for l in output.splitlines()
+             if l.strip().startswith(("E   ", "FAILED ", "ERROR "))]
+    return "\n".join(lines)
+
+
 def normalize_pytest_cmd(cmd: str) -> str:
     """Run pytest through THIS interpreter so the check uses the exact Python/site-packages
     raster is running under, instead of a bare `pytest` that may not be on PATH."""
@@ -246,7 +257,20 @@ _AUTHOR_INSTRUCTIONS = (
     "subclass with a null/dummy collaborator its base class dereferences (e.g. a Mesa Agent with "
     "model=None, an ORM model with no session): that's an UNSATISFIABLE contract no correct impl "
     "can meet. Use a real or mock collaborator; if standalone pure-logic testing is the intent, the "
-    "PRODUCT must expose an explicit null-collaborator path and the test must rely on that contract."
+    "PRODUCT must expose an explicit null-collaborator path and the test must rely on that contract.\n"
+    "ROUND-TRIP A FIXTURE THROUGH ITS OWN GOLDEN. When you hand-compute an expected value under "
+    "ASSUMED PROPERTIES of a helper you also build from a golden table, the value and the helper can "
+    "silently disagree — both look authoritative, yet no correct impl can satisfy the value. So add a "
+    "3-line SELF-CHECK in the fixture that asserts the helper actually has the assumed properties "
+    "BEFORE any value relies on them (a distance/metric adapter: assert m(x,x)==0 and m(a,b)==m(b,a)). "
+    "It fails at authoring time instead of after the worker burns its budget on an unsatisfiable test.\n"
+    "DON'T USE A HALF-MATRIX TABLE AS A METRIC. A symmetric relation stored de-duplicated (each "
+    "unordered pair once, no diagonal) is a TABLE, not a FUNCTION: `GOLDEN.get((a,b), default)` keyed "
+    "by free (a,b) misses the other order and the (a,a) diagonal, yielding an asymmetric, "
+    "non-reflexive pseudo-metric. Either author the golden as a FULL symmetric table WITH diagonal "
+    "(generate + consistency-check it once), or — where test independence isn't the point — call the "
+    "ONE canonical product metric. A bespoke lambda over a half-matrix re-implements 'be a metric' "
+    "and gets it wrong invisibly (the stubbed collect can't see it; impl can't satisfy it)."
 )
 
 

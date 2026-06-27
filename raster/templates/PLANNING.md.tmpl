@@ -90,8 +90,9 @@ in `tasks.yaml`. Rules that make a spec **valid** (get these right or the build 
 - **A freeze collect proves *collectible + self-consistent*, never *correct*.** raster stubs the
   not-yet-built product so `--collect-only` passes; that says nothing about whether the goldens
   are right. The generated **freeze gate** additionally runs `raster lint` (a cross-reference
-  linter: unresolvable golden keys, undefined fixtures, inconsistent call signatures) — but value-
-  and intent-correctness still need the freeze→impl `checkpoint:` and Layer-1 guards (Step 3b).
+  linter: unresolvable golden keys, undefined fixtures, inconsistent call signatures, half-matrix
+  golden tables looked up by free `(a,b)`) — but value- and intent-correctness still need the
+  freeze→impl `checkpoint:` and Layer-1 guards (Step 3b).
 - **Green ≠ verified — design so every frozen test actually RUNS against the product.** Don't
   author `try: import <product>; except ImportError: pytest.skip(...)`: the product is stubbed at
   collect time, so that idiom only fires on a real name schism and converts it into a permanent
@@ -109,6 +110,15 @@ in `tasks.yaml`. Rules that make a spec **valid** (get these right or the build 
   subsystem the consumer reimplemented inline; `raster lint` flags it (a whole-system check), and
   the checkpoint review should grep each consumer for the upstream symbols it must call and wiggle
   each headline parameter to confirm it moves.
+- **Make fixtures round-trip their own goldens; a worker plateau means the oracle is wrong.** When a
+  frozen test hand-computes an expected value under *assumed properties* of a helper it builds from a
+  golden table, the value and the helper can silently disagree — classically a symmetric relation
+  stored as a half-matrix (one order per pair, no diagonal) then used as a runtime `(a,b)` lookup,
+  giving an asymmetric, non-reflexive pseudo-metric no correct impl can satisfy (`raster lint` flags
+  the lookup; the freeze checkpoint should assert the adapter is reflexive + symmetric, or store a
+  full table). And when a worker fails on the **byte-identical** value across an escalation, raster
+  aborts to a human oracle check — a stable wrong value is a correct computation against a wrong
+  *expectation*, so fix the frozen golden, not the impl.
 - **`depends_on`** encodes the DAG; `raster queue` linearizes it into a single-parent
   trundlr chain, so a failure auto-blocks everything downstream. Order tasks so each
   depends on what it actually needs.

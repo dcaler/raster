@@ -21,6 +21,10 @@ Checks (each maps to an observed defect class):
     bypassed (reimplemented inline). A whole-system check; self-limits to modules already built.
   * golden-key resolvability  — a literal subscript NAME["lit"] into a golden dict whose
     literal keys we can see must have "lit" among them (caught a note-name vs Roman schism).
+  * half-matrix lookup        — a golden pair-table stored de-duplicated (each unordered pair
+    once, no diagonal) but used as a runtime lookup keyed by free (a,b) is a non-reflexive,
+    asymmetric pseudo-metric: no correct impl can satisfy a value hand-computed under a REAL
+    metric (caught segregation_index == 0.0833 vs an expected 0.8 over a half-matrix adapter).
   * fixture resolvability     — every fixture a test/fixture requests is defined somewhere
     (conftest or a test module) or is a pytest builtin (caught a fixture defined nowhere).
   * call-signature coherence  — a product symbol must not be called positionally in one file
@@ -100,6 +104,58 @@ def _golden_dicts(trees: dict) -> dict:
                         if isinstance(t, ast.Name):
                             out[t.id] = {k.value for k in keys}
     return out
+
+
+def _pair_tables(trees: dict) -> dict:
+    """Module-level `NAME = {(x,y): ...}` dicts whose keys are ALL 2-tuples of string literals ->
+    {NAME: {(x,y), ...}}. These are relation/distance tables — the half-matrix trap lives here."""
+    out = {}
+    for tree in trees.values():
+        if isinstance(tree, SyntaxError):
+            continue
+        for node in tree.body:                          # module level only
+            if not (isinstance(node, ast.Assign) and isinstance(node.value, ast.Dict)):
+                continue
+            keys = node.value.keys
+            pairs = set()
+            ok = bool(keys)
+            for k in keys:
+                if (isinstance(k, ast.Tuple) and len(k.elts) == 2
+                        and all(isinstance(e, ast.Constant) and isinstance(e.value, str)
+                                for e in k.elts)):
+                    pairs.add((k.elts[0].value, k.elts[1].value))
+                else:
+                    ok = False
+                    break
+            if ok:
+                for t in node.targets:
+                    if isinstance(t, ast.Name):
+                        out[t.id] = pairs
+    return out
+
+
+def _is_half_matrix(pairs: set) -> bool:
+    """True if a symmetric relation is stored DE-DUPLICATED: some (x,y) lacks its reverse (y,x),
+    or there's no diagonal (x,x) entry. Such a table is NOT a total metric — used as a runtime
+    lookup keyed by arbitrary (a,b) it returns the default for the missing order and for (a,a)."""
+    asymmetric = any((y, x) not in pairs for (x, y) in pairs if x != y)
+    no_diagonal = not any(x == y for (x, y) in pairs)
+    return asymmetric or no_diagonal
+
+
+def _pair_lookup(node):
+    """For `NAME[(a,b)]` and `NAME.get((a,b), …)` return (NAME, tuple_node); else (None, None)."""
+    if isinstance(node, ast.Subscript) and isinstance(node.value, ast.Name):
+        sl = node.slice
+        if isinstance(sl, ast.Index):                   # py<3.9 slice wrapper (defensive)
+            sl = sl.value
+        if isinstance(sl, ast.Tuple) and len(sl.elts) == 2:
+            return node.value.id, sl
+    elif (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+          and node.func.attr == "get" and isinstance(node.func.value, ast.Name) and node.args
+          and isinstance(node.args[0], ast.Tuple) and len(node.args[0].elts) == 2):
+        return node.func.value.id, node.args[0]
+    return None, None
 
 
 def _catches_import_error(handler: ast.ExceptHandler) -> bool:
@@ -324,6 +380,25 @@ def lint_frozen_tests(code, package: str, spec: dict = None) -> list:
                     violations.append(
                         f"{f.name}:{node.lineno}: {name}[{key!r}] — key absent from {name} "
                         f"(keys: {', '.join(sorted(golden[name])[:8])})")
+
+    # half-matrix lookup: a de-duplicated symmetric relation (one order per pair, no diagonal)
+    # used as a runtime lookup keyed by free (a, b) is a non-reflexive, asymmetric pseudo-metric.
+    # A value hand-computed under a REAL metric can't be satisfied by it (SchellingChords M5.T1:
+    # segregation_index returned 0.0833 under the half-matrix adapter, but expected 0.8).
+    half = {n: p for n, p in _pair_tables(trees).items() if _is_half_matrix(p)}
+    for f, tree in trees.items():
+        if isinstance(tree, SyntaxError):
+            continue
+        for node in ast.walk(tree):
+            name, keytup = _pair_lookup(node)
+            if name in half and all(isinstance(e, ast.Name) for e in keytup.elts):
+                violations.append(
+                    f"{f.name}:{node.lineno}: {name}[(a,b)] looks up a HALF-MATRIX table by free "
+                    f"variables — {name} stores each unordered pair once with no diagonal, so as a "
+                    f"runtime (a,b) lookup it's asymmetric and non-reflexive (a pseudo-metric, not a "
+                    f"metric). A value hand-computed under a real metric is then UNSATISFIABLE. "
+                    f"Pre-expand {name} to a full symmetric table with diagonal, or wrap the lookup "
+                    f"in a reflexive + two-order adapter.")
 
     # fixtures: collect all definitions first, then check every request resolves
     defined = set(PYTEST_BUILTIN_FIXTURES)
