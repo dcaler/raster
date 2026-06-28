@@ -23,8 +23,9 @@
 #     of a product module, a test importing a module no task delivers, a half-matrix golden table
 #     looked up by free (a,b), a per-step monotonicity/dip-count gate on np.diff of a (stochastic)
 #     trend, a consumer holding a private COPY of a canonical constant ('based on <module>' / the
-#     same constant defined as a literal in 2+ product modules), AND a static spec check — e.g. an
-#     IMPLEMENT task that lists a frozen tests/ path as a deliverable) — Layer-1 defects that pass a
+#     same constant defined as a literal in 2+ product modules), a `len(CONSTANT) == int` where the
+#     int is also a run-parameter value (structural-size pinned to a knob), AND a static spec check —
+#     e.g. an IMPLEMENT task that lists a frozen tests/ path as a deliverable) — Layer-1 defects that pass a
 #     green collect but hard-block (or falsely red) impl.
 #     (`raster lint` runs by hand too.)
 #   * ORACLE-INTERNAL CONSISTENCY: a frozen test can hand-compute an expected value under ASSUMED
@@ -56,6 +57,15 @@
 #     and the same constant defined as a literal in 2+ product modules. Prove the net bites — perturb
 #     one canonical entry and confirm the gate goes RED. Same trap for magic numbers: an int literal
 #     equal to a config field's default is a dead knob off-default — read the config, don't hardcode it.
+#   * DON'T PIN A STRUCTURAL CONSTANT'S SIZE TO A RUN PARAMETER: a structural fact (how many chords the
+#     vocabulary DEFINES, 7) and a run knob (how many a run SELECTS, n_chord_types=3) are DIFFERENT
+#     LAYERS. `len(DIATONIC_CHORDS) == 3` is a category error, not a typo: no impl can make a constant's
+#     length equal a per-run knob, so it's UNSATISFIABLE and survives escalation (SchellingChords M7.T1:
+#     `7 == 3` burned all 4 attempts). For every `len(CONSTANT) == literal`, ask which layer the number
+#     lives in; if the literal also appears as a parameter value it's probably conflated. DERIVE the
+#     expected (`len(VOCAB) == len(diatonic_major())`), don't hand-type it; raster lint flags the
+#     pinned-to-a-knob form. And ISOLATE integrity/sanity guards from the acceptance test — a buggy
+#     decorative guard must not fail a deliverable that actually passed.
 #   * PLATEAU = ORACLE BUG, NOT A DUMB WORKER: when a worker fails on the byte-identical value across
 #     an escalation (a stronger rung reproduces it), raster ABORTS the task to a human oracle check
 #     instead of burning the budget — a stable wrong value is a correct computation against a wrong
@@ -125,7 +135,11 @@
 #     a copy — grep the constant's name (>2 definitions = one source + one oracle is a smell; a
 #     product copy "based on" the canonical file is the bug), then PERTURB one canonical entry and
 #     confirm the gate goes red (a constant test that can't be made to fail by editing the source is
-#     not a test). Flag mod-12-irrelevant / octave-style choices the structural net leaves free.
+#     not a test). Flag mod-12-irrelevant / octave-style choices the structural net leaves free; (7) for
+#     every `len(CONSTANT) == literal` integrity assertion, name the LAYER the number lives in
+#     (structure vs run knob) and confirm the literal isn't a parameter value in disguise — prefer the
+#     derived `len(VOCAB) == len(source())`; and confirm no buggy sanity-guard can sink a deliverable
+#     that actually passes (isolate guards or scrutinize them as hard as the contract beside them).
 
 orchestration:
   task:    {advance_on: unit_test_pass, on_fail: block_next_task}
@@ -205,8 +219,10 @@ modules: []
 #       hand-computed under assumed properties of a helper built from a golden table, round-trip it
 #       (assert the metric/adapter is reflexive + symmetric; no half-matrix used as a runtime (a,b)
 #       function); (2) the model shape matches DESIGN.md (not a hallucinated alternative);
-#       (3) every downstream-consumed identifier/constant is named as the guards expect.
-#       Flag issues as file:line; end with a go/no-go.
+#       (3) every downstream-consumed identifier/constant is named as the guards expect;
+#       (4) no `len(CONSTANT) == literal` integrity test pins a structural size to a run-parameter
+#       value (prefer the derived `== len(source())`), and no buggy sanity-guard can fail a passing
+#       deliverable. Flag issues as file:line; end with a go/no-go.
 #     tasks:
 #       - id: M0.T1
 #         title: Package scaffold + import smoke

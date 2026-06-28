@@ -141,6 +141,17 @@ in `tasks.yaml`. Rules that make a spec **valid** (get these right or the build 
   `based on <module>` copies and a constant defined as a literal in 2+ product modules. Prove the
   net bites — perturb one canonical entry and confirm the gate reddens — and never hardcode a magic
   number that equals a config field's default (a dead knob off-default; read the config).
+- **Don't pin a structural constant's size to a run parameter.** A structural fact (how many chords
+  the vocabulary *defines*, 7) and a run knob (how many a run *selects*, `n_chord_types=3`) are
+  **different layers**; a single assertion speaks to only one. `len(DIATONIC_CHORDS) == 3` — where 3
+  is the knob, not the vocabulary's size — is a category error, not a typo: no impl can make a
+  constant's length equal a per-run knob, so it is *unsatisfiable* and survives escalation to a
+  stronger model (the task is broken, not the worker — SchellingChords M7.T1 burned all four
+  attempts on `7 == 3`). For every `len(CONSTANT) == literal`, ask which layer the number lives in;
+  if the literal also appears as a parameter value, suspect a conflation. **Derive** the expected
+  (`len(VOCAB) == len(diatonic_major())`), don't hand-type it; `raster lint` flags the pinned-to-a-knob
+  form. And **isolate integrity/sanity guards** from the real acceptance test — a bug in a decorative
+  guard must not be able to fail a deliverable that actually passed.
 - **`depends_on`** encodes the DAG; `raster queue` linearizes it into a single-parent
   trundlr chain, so a failure auto-blocks everything downstream. Order tasks so each
   depends on what it actually needs.

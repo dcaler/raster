@@ -342,7 +342,20 @@ _AUTHOR_INSTRUCTIONS = (
     "instead. PROVE the net bites: perturbing one entry of the canonical definition must turn the "
     "gate RED; if it stays green, the gate is wired to a duplicate. Likewise, never hardcode a magic "
     "number that equals a config field's default (bars*4 where 4 is cfg.beats_per_bar) — read the "
-    "config, or the knob silently dies off-default."
+    "config, or the knob silently dies off-default.\n"
+    "DON'T PIN A STRUCTURAL CONSTANT'S SIZE TO A RUN PARAMETER. A structural fact (how many chords "
+    "the vocabulary DEFINES) and a run knob (how many a run SELECTS, n_chord_types) are DIFFERENT "
+    "LAYERS; a single assertion speaks to only one. `len(DIATONIC_CHORDS) == 3`, where 3 is "
+    "n_chord_types and the vocabulary has 7, is a category error, not a typo: no implementation can "
+    "make a constant's length equal a per-run knob, so it's UNSATISFIABLE and survives escalation to "
+    "a stronger model (the task is broken, not the worker). For every `len(CONSTANT) == <literal>`, "
+    "ask which layer the number lives in; if that literal also appears as a config field / parameter "
+    "value, you've probably conflated them. DERIVE the expected from the canonical source "
+    "(`len(VOCAB) == len(diatonic_major())`), don't hand-type it: a typed expected is a transcription "
+    "waiting to be wrong, and a derived one CANNOT be conflated with a knob. Reserve bare literals "
+    "for genuinely axiomatic facts. And ISOLATE integrity/sanity guards from the real acceptance "
+    "test: a bug in a decorative guard must not be able to fail a deliverable that actually passed, "
+    "so give guards their own file/task or hold them to the same scrutiny as the contract beside them."
 )
 
 

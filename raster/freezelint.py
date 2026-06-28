@@ -35,6 +35,11 @@ Checks (each maps to an observed defect class):
     stochastic/non-greedy update rule the observable only drifts upward, so the per-step claim is
     false and a small seed-average just makes the verdict seed-dependent (caught G5's `3 <= 1`). A
     smell the human adjudicates — flag it; the count-vs-count majority test is excluded.
+  * constant-vs-parameter conflation — `len(CONSTANT) == <int>` where the int ALSO appears as a
+    run-parameter value (a lowercase config field / kwarg) pins a structural constant's SIZE to a
+    knob's value: a layer confusion (how many the vocabulary DEFINES vs how many a run SELECTS) that
+    no impl can satisfy and that survives model escalation (caught M7.T1's `len(DIATONIC_CHORDS) ==
+    3`, where 3 was n_chord_types and the vocab has 7). A smell; the derived `== len(source())` is clean.
   * fixture resolvability     — every fixture a test/fixture requests is defined somewhere
     (conftest or a test module) or is a pytest builtin (caught a fixture defined nowhere).
   * call-signature coherence  — a product symbol must not be called positionally in one file
@@ -469,6 +474,44 @@ def lint_copied_constants(code, package: str) -> list:
     return violations
 
 
+def _is_const_name(name: str) -> bool:
+    """A constant-cased name (ALL_CAPS) — a structural/vocabulary constant, not a run knob."""
+    return name.isupper() and any(c.isalpha() for c in name)
+
+
+def _len_arg(node) -> str:
+    """If `node` is `len(NAME)`, return NAME's id, else ''."""
+    if (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+            and node.func.id == "len" and len(node.args) == 1
+            and isinstance(node.args[0], ast.Name)):
+        return node.args[0].id
+    return ""
+
+
+def _run_param_ints(trees) -> dict:
+    """{int literal -> {lowercase param names assigned that literal}} across the frozen tests.
+    A run parameter is a lowercase identifier given an int literal — a config field (`n_chord_types
+    = 3`), a kwarg (`Config(n_chord_types=3)`), or an annotated field. Used to spot a structural
+    constant's size assertion that pins to a KNOB's value instead of the structure's own size."""
+    out = {}
+    for tree in trees.values():
+        if isinstance(tree, SyntaxError):
+            continue
+        for node in ast.walk(tree):
+            pairs = []
+            if isinstance(node, ast.Assign):
+                pairs = [(t.id, node.value) for t in node.targets if isinstance(t, ast.Name)]
+            elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name) and node.value:
+                pairs = [(node.target.id, node.value)]
+            elif isinstance(node, ast.keyword) and node.arg:
+                pairs = [(node.arg, node.value)]
+            for name, val in pairs:
+                if (name[:1].islower() and isinstance(val, ast.Constant)
+                        and isinstance(val.value, int) and not isinstance(val.value, bool)):
+                    out.setdefault(val.value, set()).add(name)
+    return out
+
+
 def lint_frozen_tests(code, package: str, spec: dict = None) -> list:
     """Return a list of human-readable cross-reference violations (empty == clean). When `spec`
     is given, also checks that every product module a test imports is a declared deliverable."""
@@ -598,6 +641,39 @@ def lint_frozen_tests(code, package: str, spec: dict = None) -> list:
                         f"claim the process guarantees — net rise + up-steps outnumber down-steps "
                         f"(count-vs-count, not count-vs-constant), or a final-state-vs-baseline test "
                         f"— and re-run with a disjoint seed list to prove the verdict is stable.")
+
+    # structural constant's SIZE pinned to a run-parameter's VALUE: `len(VOCAB) == 3` where 3 is a
+    # knob (n_chord_types), not the vocabulary's own size (7). A category error ACROSS conceptual
+    # layers (fixed structure vs per-run selection): no impl can make a constant's length equal a
+    # run knob, so it's unsatisfiable and survives model escalation (SchellingChords M7.T1:
+    # `len(DIATONIC_CHORDS) == 3` failed `7 == 3`, burning all 4 attempts). A SMELL the human
+    # adjudicates — the derived form `len(VOCAB) == len(source())` carries no int literal, so it's
+    # naturally clean and never flagged.
+    param_ints = _run_param_ints(trees)
+    for f, tree in trees.items():
+        if isinstance(tree, SyntaxError):
+            continue
+        for node in ast.walk(tree):
+            if not (isinstance(node, ast.Compare) and len(node.ops) == 1
+                    and isinstance(node.ops[0], ast.Eq)):
+                continue
+            sides = [node.left, node.comparators[0]]
+            cnames = [n for n in (_len_arg(s) for s in sides) if n and _is_const_name(n)]
+            lits = [s.value for s in sides if isinstance(s, ast.Constant)
+                    and isinstance(s.value, int) and not isinstance(s.value, bool)]
+            for cname in cnames:
+                for lit in lits:
+                    if lit in param_ints:
+                        knobs = ", ".join(sorted(param_ints[lit]))
+                        violations.append(
+                            f"{f.name}:{node.lineno}: len({cname}) == {lit} pins a structural "
+                            f"constant's SIZE to {lit}, which also appears as a run-parameter value "
+                            f"({knobs}) — a likely LAYER CONFUSION (how many the vocabulary DEFINES "
+                            f"vs how many a run SELECTS). If {cname} is a fixed structure no impl can "
+                            f"make its length equal a per-run knob, so this is unsatisfiable and "
+                            f"survives escalation. Derive the expected from the canonical source "
+                            f"(`len({cname}) == len(<source>())`) or assert the true structural size, "
+                            f"not the knob's value.")
 
     # fixtures: collect all definitions first, then check every request resolves
     defined = set(PYTEST_BUILTIN_FIXTURES)

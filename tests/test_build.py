@@ -327,6 +327,37 @@ def test_freezelint_distributional_gate_clean(tmp_path):
     assert lint_frozen_tests(code, "pkg") == []
 
 
+def test_freezelint_constant_parameter_conflation(tmp_path):
+    from raster.freezelint import lint_frozen_tests
+    code = tmp_path / "code"
+    tests = code / "tests"
+    tests.mkdir(parents=True)
+    # DIATONIC_CHORDS is the structural vocabulary (7); n_chord_types=3 is a run knob. Asserting
+    # len(VOCAB) == 3 pins a constant's size to the knob's value -> unsatisfiable layer confusion.
+    (tests / "test_integrity.py").write_text(
+        'DIATONIC_CHORDS = ["C", "Dm", "Em", "F", "G", "Am", "Bdim"]\n'
+        "def cfg():\n    return dict(n_chord_types=3)\n"
+        "def test_integrity():\n    assert len(DIATONIC_CHORDS) == 3\n")        # 3 is the knob -> flagged
+    viols = [x for x in lint_frozen_tests(code, "pkg") if "LAYER CONFUSION" in x]
+    assert len(viols) == 1
+    assert "DIATONIC_CHORDS" in viols[0] and "n_chord_types" in viols[0]
+
+
+def test_freezelint_constant_parameter_conflation_clean(tmp_path):
+    from raster.freezelint import lint_frozen_tests
+    code = tmp_path / "code"
+    tests = code / "tests"
+    tests.mkdir(parents=True)
+    # Two clean forms: the DERIVED expected (no int literal), and a literal that is NOT a knob value.
+    (tests / "test_integrity.py").write_text(
+        'DIATONIC_CHORDS = ["C", "Dm", "Em", "F", "G", "Am", "Bdim"]\n'
+        "def diatonic_major():\n    return DIATONIC_CHORDS\n"
+        "def cfg():\n    return dict(n_chord_types=3)\n"
+        "def test_derived():\n    assert len(DIATONIC_CHORDS) == len(diatonic_major())\n"   # derived
+        "def test_structural():\n    assert len(DIATONIC_CHORDS) == 7\n")                   # 7 != any knob
+    assert [x for x in lint_frozen_tests(code, "pkg") if "LAYER CONFUSION" in x] == []
+
+
 def test_failure_signature():
     out = ("tests/test_seg.py::test_seg FAILED\n"
            "    def test_seg():\n"
