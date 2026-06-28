@@ -73,9 +73,8 @@ def run_build(args) -> int:
     owners = authoring_owners(project.spec)   # single-owner write-protection on shared frozen infra
     stub_pkg = project.package if authoring else None   # freeze collects stub the absent product
 
-    prompt = execlib.build_prompt(project, module, task, authoring)
     if args.dry_run:
-        print(prompt)
+        print(execlib.build_prompt(project, module, task, authoring))
         return 0
 
     max_attempts = args.max_attempts or MAX_ATTEMPTS
@@ -85,9 +84,9 @@ def run_build(args) -> int:
         f"mode={'AUTHOR tests' if authoring else 'IMPLEMENT'}, "
         f"start_rung={start + 1}/{len(ladder)} ({start_key}), max_attempts={max_attempts}")
     log(f"  ollama={host}  test_cmd={unit_cmd!r}  cwd={project.code}")
-    messages = [{"role": "user", "content": prompt}]
 
-    prev_sig = None     # last attempt's failure signature, for oracle-bug plateau detection
+    prev_sig = None     # last attempt's failure signature, for the same-failure plateau abort
+    feedback = None     # the SINGLE most-useful prior-failure summary — re-composed, never grown
     for attempt in range(1, max_attempts + 1):
         idx = rung_index(start, attempt, ESCALATE_AFTER, len(ladder))
         worker_key, think = resolve_rung(ladder, idx, task, authoring, project.meta)
@@ -98,6 +97,16 @@ def run_build(args) -> int:
         else:
             log(f"=== attempt {attempt}/{max_attempts} ({rung}) ===")
 
+        # Re-compose a fixed, minimal prompt each attempt (the prompt is a resource you SPEND,
+        # not a log you grow): task spec + frozen contract + current on-disk code (the latest
+        # near-miss, re-read fresh via package_sources) + the SINGLE most-useful failure summary.
+        # Escalation therefore inherits NO transcript — the slow/dear tier gets the smallest good
+        # prompt, not the most polluted one (the two cost levers stop pulling against each other).
+        prompt = execlib.build_prompt(project, module, task, authoring)
+        messages = [{"role": "user", "content": prompt}]
+        if feedback:
+            messages.append({"role": "user", "content": feedback})
+
         reply = ollama.chat(host, active, messages, label=f"{args.task} a{attempt}", think=think)
         files = execlib.parse_files(reply)
         diag = execlib.parse_diagnostics(reply, files)
@@ -106,11 +115,11 @@ def run_build(args) -> int:
             # opened-but-unterminated path or no marker at all — and the exact closer, so the
             # next ~16-min cycle is most likely to recover instead of re-drifting on a generic
             # 're-emit using the format' that re-sends the contract already in view.
+            # A failed reply's body has NEGATIVE value here — re-feeding it anchors the model on
+            # the same malformed block — so DROP it and carry only the short targeted note.
             log(f"attempt {attempt}: NO files parsed from {len(reply)}-char reply "
                 f"({execlib.parse_failure_reason(diag)}) — re-prompting.")
-            messages.append({"role": "assistant", "content": reply})
-            messages.append({"role": "user", "content":
-                             execlib.reprompt_for_parse_failure(diag, project.code.name)})
+            feedback = execlib.reprompt_for_parse_failure(diag, project.code.name)
             continue
 
         log(f"attempt {attempt}: parsed {len(files)} file(s): {list(files)}")
@@ -151,24 +160,27 @@ def run_build(args) -> int:
                 f"loop. Check that `raster` is importable on PYTHONPATH for the test subprocess.")
             return 1
 
-        if not authoring and idx > start:
-            # Oracle-bug plateau: a STRONGER rung reproduced the byte-identical failing value a
-            # weaker one already produced. Climbing the ladder didn't move it, so this is a
-            # deterministic correct computation against a WRONG expected value (a frozen-test oracle
-            # bug), not a coding failure. Stop early — the remaining budget can't repair the test.
+        if not authoring:
+            # Same-failure plateau: two consecutive attempts produced the BYTE-IDENTICAL failing
+            # value. A stronger model cannot satisfy an unsatisfiable task, so refuse to escalate
+            # INTO it — this is the signature of a correct computation against a WRONG frozen
+            # expected value (an oracle bug), not a coding failure the ladder can repair. Abort to a
+            # HUMAN ORACLE CHECK now, before the expensive tier burns an attempt on a broken task.
             sig = execlib.failure_signature(output)
             if sig and sig == prev_sig:
-                log(f"FAILED build={args.task}: STABLE failing value across an escalation — a "
-                    f"stronger model reproduced the byte-identical failure, so the ladder can't fix "
-                    f"it. This is the signature of a correct computation against a WRONG expected "
-                    f"value (an oracle bug in the frozen test), not a worker coding failure. Aborting "
-                    f"to a HUMAN ORACLE CHECK rather than burning the remaining attempts. "
+                span = "across an escalation" if idx > start else "on two consecutive attempts"
+                log(f"FAILED build={args.task}: STABLE failing value {span} — the byte-identical "
+                    f"failure repeated, so a stronger rung can't fix it. This is the signature of a "
+                    f"correct computation against a WRONG expected value (an oracle bug in the frozen "
+                    f"test), not a worker coding failure. Aborting to a HUMAN ORACLE CHECK rather than "
+                    f"escalating into / burning the remaining attempts. "
                     f"Signature:\n    {sig.replace(chr(10), chr(10) + '    ')}")
                 return 1
             prev_sig = sig
-        elif not authoring:
-            prev_sig = execlib.failure_signature(output)
 
+        # Logic failure: keep ONLY the latest failing output + a targeted fix as next attempt's
+        # feedback (marginal value, latest only — the chain of prior near-misses is noise). The
+        # near-miss CODE is carried on disk and re-read into the next prompt, not stuffed here.
         if authoring:
             fix = ("These are pytest COLLECTION errors in the TEST files you wrote — the tests "
                    "must import and collect cleanly (they may still FAIL when run against the "
@@ -180,9 +192,7 @@ def run_build(args) -> int:
                    "Do NOT write implementation.")
         else:
             fix = "Fix the implementation and re-emit ALL files in full."
-        messages.append({"role": "assistant", "content": reply})
-        messages.append({"role": "user", "content":
-                         f"`{unit_cmd}` failed:\n\n{output[-MAX_OUTPUT_CHARS:]}\n\n" + fix})
+        feedback = f"Your previous attempt failed `{unit_cmd}`:\n\n{output[-MAX_OUTPUT_CHARS:]}\n\n" + fix
 
     log(f"FAILED build={args.task} after {max_attempts} attempts. "
         f"Inspect {project.code} or re-run with more RASTER_MAX_ATTEMPTS.")

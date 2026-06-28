@@ -82,6 +82,51 @@ def test_parse_diagnostics_clean():
     assert diag["unterminated"] == []                      # nothing dropped -> no warning fires
 
 
+def _drive_build(tmp_path, monkeypatch, run_test_output):
+    """Drive the real run_build loop offline. `run_test_output(attempt) -> output` lets a test
+    choose whether successive failures are identical (plateau) or distinct. Returns (rc, sizes)
+    where sizes[i] is the total prompt chars fed to the model on attempt i+1."""
+    from types import SimpleNamespace
+    from raster import build, ollama
+    project = make_project(tmp_path)
+    monkeypatch.setattr(build, "load_project", lambda d: project)
+    sizes, n = [], {"i": 0}
+
+    def fake_chat(host, model, messages, label="", think=False):
+        sizes.append(sum(len(m["content"]) for m in messages))
+        return "=== FILE: pkg/__init__.py ===\nx = 1\n=== END FILE ===\n"   # well-formed, will FAIL
+
+    def fake_run_test(proj, cmd, stub_pkg=None):
+        n["i"] += 1
+        return False, run_test_output(n["i"])
+
+    monkeypatch.setattr(ollama, "chat", fake_chat)
+    monkeypatch.setattr(execlib, "run_test", fake_run_test)
+    monkeypatch.setattr(execlib, "git_commit_push", lambda *a, **k: None)
+    args = SimpleNamespace(dir=str(tmp_path), task="M0.T1", dry_run=False, max_attempts=4)
+    return build.run_build(args), sizes
+
+
+def test_build_loop_recomposes_prompt_not_accumulates(tmp_path, monkeypatch):
+    # DISTINCT failure each attempt -> no plateau -> runs the full budget. The prompt is
+    # RE-COMPOSED each attempt (task + contract + on-disk code + ONE failure summary), so retry
+    # prompts are the same shape, not an ever-growing transcript (X/Y).
+    rc, sizes = _drive_build(tmp_path, monkeypatch,
+                             lambda i: f"E   assert {i} == 99\nFAILED tests/test_smoke.py::test_x")
+    assert rc == 1 and len(sizes) == 4                     # all 4 attempts ran (failures differ)
+    assert sizes[1] == sizes[2] == sizes[3]                # every retry prompt is the same size
+    assert sizes[3] < sizes[1] * 1.5                       # no runaway accumulation across the loop
+
+
+def test_build_loop_aborts_on_plateau_before_escalating(tmp_path, monkeypatch):
+    # IDENTICAL failure each attempt -> byte-identical signature on attempt 2 -> abort to an
+    # oracle check WITHOUT spending the strong tier (ESCALATE_AFTER=2 -> attempt 3 would escalate).
+    rc, sizes = _drive_build(tmp_path, monkeypatch,
+                             lambda i: "E   assert 0.0833 == 0.8\nFAILED tests/test_smoke.py::test_x")
+    assert rc == 1
+    assert len(sizes) == 2                                 # aborted on the 2nd identical failure
+
+
 def test_write_files_guards(tmp_path):
     project = make_project(tmp_path)
     files = {"pkg/a.py": "x = 1", "tests/t.py": "frozen", "../escape.py": "nope"}
