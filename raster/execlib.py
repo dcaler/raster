@@ -16,6 +16,10 @@ from raster.runlog import log
 from raster.spec import Project, module_by_id, owner_of
 
 FILE_RE = re.compile(r"=== FILE: (.+?) ===\n(.*?)\n=== END FILE ===", re.DOTALL)
+# Opening marker alone (no `=== END FILE ===` required). An opened path absent from FILE_RE's
+# parse is a block missing its terminator — single-line match, so a stray `===` in a file body
+# (DOTALL off here) can't be swallowed into it.
+OPEN_RE = re.compile(r"=== FILE: (.+?) ===")
 TEST_TIMEOUT = int(os.environ.get("RASTER_TEST_TIMEOUT", 600))
 GIT_PUSH = os.environ.get("RASTER_GIT_PUSH", "1") not in ("0", "false", "no", "")
 
@@ -35,6 +39,46 @@ def output_contract(pkg: str, root: str = "code") -> str:
 
 def parse_files(text: str) -> dict:
     return {path.strip(): content for path, content in FILE_RE.findall(text)}
+
+
+def parse_diagnostics(text: str, files: dict) -> dict:
+    """Classify a FILE-block parse for self-diagnosing logs and targeted re-prompts.
+    `opened` = every `=== FILE: ===` opening marker; `parsed` = the blocks FILE_RE actually
+    closed; `unterminated` = opened-but-not-closed paths (a block missing `=== END FILE ===`).
+    A non-empty `unterminated` ALONGSIDE a non-empty `files` is the partial-parse silent-drop
+    case — some files landed, one was discarded with no re-prompt (write-path addendum, W)."""
+    opened = [p.strip() for p in OPEN_RE.findall(text)]
+    parsed = set(files)
+    return {"opened": opened, "parsed": list(files),
+            "unterminated": [p for p in opened if p not in parsed]}
+
+
+def parse_failure_reason(diag: dict) -> str:
+    """Why a parse produced (too) few files, so a human reading the doer log classifies it at a
+    glance instead of re-deriving it from the reply head (write-path addendum, V)."""
+    if diag["unterminated"]:
+        return (f"opened {len(diag['unterminated'])} FILE block(s) but no `=== END FILE ===` "
+                f"closer: {diag['unterminated']}")
+    return "no `=== FILE:` opening marker at all"
+
+
+def reprompt_for_parse_failure(diag: dict, root: str = "code") -> str:
+    """A TARGETED re-prompt naming the exact defect and exact remedy — never a restated spec.
+    A generic 're-emit using the format' re-sends the contract the worker already had in view
+    and frequently reproduces the identical drift, burning a second ~cycle; naming the
+    unterminated path(s) and the precise closer converts most of these to one-cycle recoveries
+    (write-path addendum, U — the cheapest high-leverage write-path fix there is)."""
+    bad = diag["unterminated"]
+    if bad:
+        paths = ", ".join(bad)
+        return (f"You opened {len(bad)} FILE block(s) ({paths}) but did NOT close them. Each "
+                "file must end with a line containing EXACTLY `=== END FILE ===` — not ``` , not "
+                "`=== END ===`, not `=== FILE END ===`. Re-emit ALL files in full, each wrapped "
+                "`=== FILE: <path> ===` then the full contents then `=== END FILE ===`.")
+    return ("No `=== FILE: <path> ===` marker was found in your reply. Output ONLY files, each "
+            "wrapped EXACTLY as `=== FILE: <path> ===`, then the full contents, then a line "
+            f"`=== END FILE ===` — no prose, no markdown fences. Paths relative to the {root}/ "
+            f"root, not prefixed with {root}/.")
 
 
 def read_if_exists(project: Project, rel: str) -> str:

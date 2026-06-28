@@ -51,6 +51,37 @@ def test_parse_files():
     assert files == {"pkg/a.py": "x = 1", "pkg/b.py": "y = 2"}
 
 
+def test_parse_diagnostics_unterminated():
+    # one closed block + one opened-but-not-closed (missing === END FILE ===)
+    text = ("=== FILE: pkg/a.py ===\nx = 1\n=== END FILE ===\n"
+            "=== FILE: pkg/run.py ===\nimport sys\nprint('no closer here')\n")
+    files = execlib.parse_files(text)
+    assert files == {"pkg/a.py": "x = 1"}                  # strict parse drops the unterminated one
+    diag = execlib.parse_diagnostics(text, files)
+    assert diag["parsed"] == ["pkg/a.py"]
+    assert diag["unterminated"] == ["pkg/run.py"]          # the dropped file is surfaced
+    # self-diagnosing reason (V) and targeted re-prompt (U) both name the unterminated path
+    assert "no `=== END FILE ===`" in execlib.parse_failure_reason(diag)
+    rp = execlib.reprompt_for_parse_failure(diag)
+    assert "pkg/run.py" in rp and "=== END FILE ===" in rp
+
+
+def test_parse_diagnostics_no_marker():
+    diag = execlib.parse_diagnostics("just prose, no file blocks", {})
+    assert diag["opened"] == [] and diag["unterminated"] == []
+    assert "no `=== FILE:`" in execlib.parse_failure_reason(diag)
+    # targeted re-prompt names the root so the worker doesn't re-prefix it
+    rp = execlib.reprompt_for_parse_failure(diag, root="code")
+    assert "=== FILE:" in rp and "code/" in rp
+
+
+def test_parse_diagnostics_clean():
+    text = ("=== FILE: pkg/a.py ===\nx = 1\n=== END FILE ===\n"
+            "=== FILE: pkg/b.py ===\ny = 2\n=== END FILE ===\n")
+    diag = execlib.parse_diagnostics(text, execlib.parse_files(text))
+    assert diag["unterminated"] == []                      # nothing dropped -> no warning fires
+
+
 def test_write_files_guards(tmp_path):
     project = make_project(tmp_path)
     files = {"pkg/a.py": "x = 1", "tests/t.py": "frozen", "../escape.py": "nope"}

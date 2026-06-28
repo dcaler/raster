@@ -100,15 +100,28 @@ def run_build(args) -> int:
 
         reply = ollama.chat(host, active, messages, label=f"{args.task} a{attempt}", think=think)
         files = execlib.parse_files(reply)
+        diag = execlib.parse_diagnostics(reply, files)
         if not files:
-            log(f"attempt {attempt}: NO files parsed from {len(reply)}-char reply — re-prompting.")
+            # Self-diagnosing log (V) + targeted re-prompt (U): name the exact defect — an
+            # opened-but-unterminated path or no marker at all — and the exact closer, so the
+            # next ~16-min cycle is most likely to recover instead of re-drifting on a generic
+            # 're-emit using the format' that re-sends the contract already in view.
+            log(f"attempt {attempt}: NO files parsed from {len(reply)}-char reply "
+                f"({execlib.parse_failure_reason(diag)}) — re-prompting.")
             messages.append({"role": "assistant", "content": reply})
             messages.append({"role": "user", "content":
-                             "No files detected. Re-emit using the exact "
-                             "=== FILE: ... === / === END FILE === format."})
+                             execlib.reprompt_for_parse_failure(diag, project.code.name)})
             continue
 
         log(f"attempt {attempt}: parsed {len(files)} file(s): {list(files)}")
+        if diag["unterminated"]:
+            # Partial-parse silent drop (W): some blocks parsed, but an opening marker survived
+            # with no `=== END FILE ===`, so that file is dropped from this write with no
+            # re-prompt. The task would run a file short — surface it loudly (the failure that
+            # emits SOME output is quieter and nastier than the one that emits none).
+            log(f"  WARNING: {len(diag['unterminated'])} opened FILE block(s) had no "
+                f"`=== END FILE ===` and were DROPPED from this write: {diag['unterminated']}. "
+                f"If the test now fails on a missing file, that unterminated block is why.")
         execlib.write_files(project, files, allow_tests=authoring,
                             owners=owners, task_id=args.task)
 
