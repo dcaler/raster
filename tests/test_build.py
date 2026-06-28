@@ -266,6 +266,57 @@ def test_failure_signature():
     assert execlib.failure_signature("=== 5 passed in 0.1s ===") == ""
 
 
+def test_lint_copied_constants_flags_based_on_copy(tmp_path):
+    from raster.freezelint import lint_copied_constants
+    code = tmp_path / "code"
+    pkg = code / "pkg"
+    pkg.mkdir(parents=True)
+    # canonical source: chords.py owns the vocabulary; consumers must import it.
+    (pkg / "chords.py").write_text("DIATONIC = {'C': {0, 4, 7}, 'Em': {4, 7, 11}}\n")
+    # sonify.py holds a PRIVATE copy 'based on chords.py' -> the M6 tautology -> flagged.
+    (pkg / "sonify.py").write_text(
+        "# Based on the diatonic vocabulary in chords.py\n"
+        "PALETTE = {'C': [0, 4, 7], 'Em': [4, 7, 11]}\n"
+        "def render(name):\n    return PALETTE[name]\n")
+    v = "\n".join(lint_copied_constants(code, "pkg"))
+    assert "sonify.py" in v and "PALETTE" in v and "chords" in v
+    assert "transcription agreement" in v.lower() or "TRANSCRIPTION" in v
+
+
+def test_lint_copied_constants_flags_peer_copies(tmp_path):
+    from raster.freezelint import lint_copied_constants
+    code = tmp_path / "code"
+    pkg = code / "pkg"
+    pkg.mkdir(parents=True)
+    # same constant NAME defined as a literal in two product modules -> peer copies.
+    (pkg / "model.py").write_text("WEIGHTS = [1, 2, 3]\n")
+    (pkg / "report.py").write_text("WEIGHTS = [1, 2, 3]\n")
+    v = "\n".join(lint_copied_constants(code, "pkg"))
+    assert "WEIGHTS" in v and "model.py" in v and "report.py" in v and "peer copies" in v
+
+
+def test_lint_copied_constants_clean_when_derived(tmp_path):
+    from raster.freezelint import lint_copied_constants
+    code = tmp_path / "code"
+    pkg = code / "pkg"
+    pkg.mkdir(parents=True)
+    # one canonical literal; the consumer IMPORTS it (no private copy) -> clean.
+    (pkg / "chords.py").write_text("DIATONIC = {'C': {0, 4, 7}}\n")
+    (pkg / "sonify.py").write_text(
+        "from pkg.chords import DIATONIC\n"
+        "def render(name):\n    return DIATONIC[name]\n")
+    (pkg / "__init__.py").write_text("__all__ = ['render']\n")   # dunder, repeated -> never flagged
+    (pkg / "cli.py").write_text("__all__ = ['main']\n")
+    assert lint_copied_constants(code, "pkg") == []
+
+
+def test_lint_copied_constants_noop_when_unbuilt(tmp_path):
+    from raster.freezelint import lint_copied_constants
+    code = tmp_path / "code"
+    (code / "pkg").mkdir(parents=True)                        # package dir exists, no .py files yet
+    assert lint_copied_constants(code, "pkg") == []
+
+
 def test_lint_dead_modules_flags_islands(tmp_path):
     from raster.freezelint import lint_dead_modules
     code = tmp_path / "code"

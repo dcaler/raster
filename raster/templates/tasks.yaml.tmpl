@@ -22,8 +22,10 @@
 #     unresolvable golden keys, undefined fixtures, inconsistent call signatures, skip-on-ImportError
 #     of a product module, a test importing a module no task delivers, a half-matrix golden table
 #     looked up by free (a,b), a per-step monotonicity/dip-count gate on np.diff of a (stochastic)
-#     trend, AND a static spec check — e.g. an IMPLEMENT task that lists a frozen tests/ path as a
-#     deliverable) — Layer-1 defects that pass a green collect but hard-block (or falsely red) impl.
+#     trend, a consumer holding a private COPY of a canonical constant ('based on <module>' / the
+#     same constant defined as a literal in 2+ product modules), AND a static spec check — e.g. an
+#     IMPLEMENT task that lists a frozen tests/ path as a deliverable) — Layer-1 defects that pass a
+#     green collect but hard-block (or falsely red) impl.
 #     (`raster lint` runs by hand too.)
 #   * ORACLE-INTERNAL CONSISTENCY: a frozen test can hand-compute an expected value under ASSUMED
 #     properties of a helper it builds from a golden table, and the value + the helper silently
@@ -44,6 +46,16 @@
 #     flags the per-step form. Separate "did the feature work" (assert it) from "is the path shaped
 #     how I imagined" (don't). The domain owner decides whether near-monotonicity is even supposed to
 #     hold — only they know if a dip is a model bug or stochastic noise.
+#   * DERIVE SHARED CONSTANTS, DON'T DUPLICATE THEM: a source-of-truth constant (chord->pitch map,
+#     rate table, status enum) lives in ONE canonical place and every consumer IMPORTS it. The moment
+#     a consumer holds a private copy "based on" the source, a gate asserting consumer(x)==GOLDEN[x]
+#     compares two transcriptions — it greens because they agree, not because the consumer follows the
+#     source, and stays green when the canonical value is corrected (the very edit it should catch;
+#     SchellingChords M6: sonify.py's private DIATONIC_CHORDS). Keep exactly ONE independent golden
+#     oracle and wire the gate as (canonical)-vs-(golden); raster lint flags 'based on <module>' copies
+#     and the same constant defined as a literal in 2+ product modules. Prove the net bites — perturb
+#     one canonical entry and confirm the gate goes RED. Same trap for magic numbers: an int literal
+#     equal to a config field's default is a dead knob off-default — read the config, don't hardcode it.
 #   * PLATEAU = ORACLE BUG, NOT A DUMB WORKER: when a worker fails on the byte-identical value across
 #     an escalation (a stronger rung reproduces it), raster ABORTS the task to a human oracle check
 #     instead of burning the budget — a stable wrong value is a correct computation against a wrong
@@ -108,7 +120,12 @@
 #     gate that asserts a TREND (a metric improving over a run), check it against the FROZEN update
 #     rule — if the rule is stochastic/non-greedy, a per-step monotonicity or dip-count assertion is
 #     the wrong contract (only net/majority/distributional claims hold), and seed-smoke-test it
-#     against a disjoint seed list so the verdict can't depend on which seeds were picked.
+#     against a disjoint seed list so the verdict can't depend on which seeds were picked; (6) at a
+#     "this is where it would finally be wrong" gate, TRACE the asserted value back to its SOURCE, not
+#     a copy — grep the constant's name (>2 definitions = one source + one oracle is a smell; a
+#     product copy "based on" the canonical file is the bug), then PERTURB one canonical entry and
+#     confirm the gate goes red (a constant test that can't be made to fail by editing the source is
+#     not a test). Flag mod-12-irrelevant / octave-style choices the structural net leaves free.
 
 orchestration:
   task:    {advance_on: unit_test_pass, on_fail: block_next_task}
@@ -208,6 +225,9 @@ modules: []
 #   Claude — run the whole system end-to-end and confirm nothing drifted across modules.
 #   Spot-check that each module still honours its gate's intent (not just its letter).
 #   Run `raster lint` and resolve any ISLAND (a delivered module imported by nothing = a
-#   subsystem the consumer bypassed). For each headline parameter, WIGGLE it and confirm the
-#   run output moves (a dead knob passes every invariant test). Grep each consumer for the
-#   upstream symbols it should call. Confirm domain fidelity, not just green. Go/no-go.
+#   subsystem the consumer bypassed) and any COPIED CONSTANT (a consumer holding a private copy
+#   of a canonical value 'based on' another module — derive it instead). For each headline
+#   parameter, WIGGLE it and confirm the run output moves (a dead knob passes every invariant
+#   test); for each source-of-truth constant, PERTURB the canonical entry and confirm the gate
+#   guarding it goes red. Grep each consumer for the upstream symbols it should call. Confirm
+#   domain fidelity, not just green. Go/no-go.

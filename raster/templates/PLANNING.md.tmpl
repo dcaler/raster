@@ -92,8 +92,8 @@ in `tasks.yaml`. Rules that make a spec **valid** (get these right or the build 
   are right. The generated **freeze gate** additionally runs `raster lint` (a cross-reference
   linter: unresolvable golden keys, undefined fixtures, inconsistent call signatures, half-matrix
   golden tables looked up by free `(a,b)`, per-step monotonicity/dip-count gates on `np.diff` of a
-  stochastic trend) — but value- and intent-correctness still need the freeze→impl `checkpoint:`
-  and Layer-1 guards (Step 3b).
+  stochastic trend, a consumer holding a private copy of a canonical constant) — but value- and
+  intent-correctness still need the freeze→impl `checkpoint:` and Layer-1 guards (Step 3b).
 - **Green ≠ verified — design so every frozen test actually RUNS against the product.** Don't
   author `try: import <product>; except ImportError: pytest.skip(...)`: the product is stubbed at
   collect time, so that idiom only fires on a real name schism and converts it into a permanent
@@ -131,6 +131,16 @@ in `tasks.yaml`. Rules that make a spec **valid** (get these right or the build 
   final-state-vs-random-baseline distribution test; `raster lint` flags the per-step form, and the
   checkpoint should seed-smoke-test any stochastic gate against a disjoint seed list. Only the
   domain owner can say whether near-monotonicity is even *supposed* to hold — state the intent.
+- **Derive shared constants; a gate over two copies tests nothing.** A source-of-truth constant (a
+  chord→pitch map, a rate table, a status enum) must live in **one** canonical place that every
+  consumer *imports* — never a private copy "based on" it. Two copies make a gate that asserts
+  `consumer(x) == GOLDEN[x]` compare two transcriptions: it greens because they agree, not because
+  the consumer follows the source, and stays green when the canonical value is corrected (the very
+  edit it must catch — SchellingChords M6's private `DIATONIC_CHORDS`). Keep exactly **one**
+  independent golden oracle and wire the gate as (canonical)-vs-(golden); `raster lint` flags
+  `based on <module>` copies and a constant defined as a literal in 2+ product modules. Prove the
+  net bites — perturb one canonical entry and confirm the gate reddens — and never hardcode a magic
+  number that equals a config field's default (a dead knob off-default; read the config).
 - **`depends_on`** encodes the DAG; `raster queue` linearizes it into a single-parent
   trundlr chain, so a failure auto-blocks everything downstream. Order tasks so each
   depends on what it actually needs.

@@ -285,7 +285,20 @@ _AUTHOR_INSTRUCTIONS = (
     "distribution test. Separate 'did the feature work' (the net/distributional claim — assert it) "
     "from 'is the trajectory shaped how I imagined' (the per-step picture in your head — don't). "
     "Then SEED-SMOKE-TEST it: re-run the gate with a disjoint seed list (seeds = [s + 100 for s in "
-    "seeds]); if the verdict flips, the gate measures the seed list, not the model."
+    "seeds]); if the verdict flips, the gate measures the seed list, not the model.\n"
+    "DERIVE SHARED CONSTANTS, DON'T TRANSCRIBE THEM. A source-of-truth constant (a chord->pitch "
+    "map, a rate table, an enum of statuses) must live in ONE canonical place; every consumer "
+    "(renderer, exporter, UI, report) IMPORTS it — never carries a private copy 'based on' it. The "
+    "moment two copies exist, a gate that asserts `consumer(x) == GOLDEN[x]` is comparing two "
+    "transcriptions: it passes because they happen to agree, NOT because the consumer follows the "
+    "source, and it stays green when the canonical value is later corrected (the edit it exists to "
+    "catch). Keep exactly ONE independent hand-maintained oracle (the golden) to catch fat-finger "
+    "errors in the source; wire the gate as (canonical)-vs-(golden), so the comparison is "
+    "load-bearing. A `# based on <file>` comment over a literal is a duplication confession — import "
+    "instead. PROVE the net bites: perturbing one entry of the canonical definition must turn the "
+    "gate RED; if it stays green, the gate is wired to a duplicate. Likewise, never hardcode a magic "
+    "number that equals a config field's default (bars*4 where 4 is cfg.beats_per_bar) — read the "
+    "config, or the knob silently dies off-default."
 )
 
 

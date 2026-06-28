@@ -19,6 +19,11 @@ Checks (each maps to an observed defect class):
   * dead-module reachability (lint_dead_modules) — a delivered product module that exists but is
     imported by no other product module is an island: dead code or a subsystem the consumer
     bypassed (reimplemented inline). A whole-system check; self-limits to modules already built.
+  * copied source-of-truth constant (lint_copied_constants) — a consumer holding a PRIVATE copy of
+    a canonical constant (a literal dict/list 'based on <module>', or the same constant name
+    defined as a literal in 2+ product modules) makes its own contract gate tautological: it
+    compares one copy to another and goes green even when the canonical source is edited. Derive,
+    don't transcribe (caught sonify.py's private DIATONIC_CHORDS vs a golden copy). Whole-system.
   * golden-key resolvability  — a literal subscript NAME["lit"] into a golden dict whose
     literal keys we can see must have "lit" among them (caught a note-name vs Roman schism).
   * half-matrix lookup        — a golden pair-table stored de-duplicated (each unordered pair
@@ -37,8 +42,14 @@ Checks (each maps to an observed defect class):
 """
 
 import ast
+import re
 
 from raster.spec import declared_modules, lint_spec, load_project
+
+# comment phrases that confess a literal is a hand-synced COPY of a canonical constant elsewhere.
+_COPY_MARKERS = ("based on", "copy of", "copied from", "keep in sync", "kept in sync",
+                 "in sync with", "mirror of", "mirrors ", "duplicate of", "must match",
+                 "matches ", "same as")
 
 # pytest's built-in fixtures — requested but never user-defined.
 PYTEST_BUILTIN_FIXTURES = {
@@ -384,6 +395,80 @@ def lint_dead_modules(code, package: str, spec: dict) -> list:
     return violations
 
 
+def _assign_comment(lines: list, node: ast.Assign) -> str:
+    """The comment text attached to an assignment: a trailing `# …` on its last line, plus a
+    full-line `# …` directly above it (the two places a 'based on X' confession lands)."""
+    parts = []
+    end = getattr(node, "end_lineno", node.lineno)
+    if 1 <= end <= len(lines) and "#" in lines[end - 1]:
+        parts.append(lines[end - 1].split("#", 1)[1])
+    i = node.lineno - 2                                  # 0-based line directly above the assign
+    while i >= 0 and not lines[i].strip():
+        i -= 1
+    if i >= 0 and lines[i].lstrip().startswith("#"):
+        parts.append(lines[i].lstrip()[1:])
+    return " ".join(parts)
+
+
+def lint_copied_constants(code, package: str) -> list:
+    """A source-of-truth constant copied into a CONSUMER is a tautology factory: a gate that
+    asserts `render(x) == GOLDEN[x]` over a private product copy verifies that two transcriptions
+    agree, not that the consumer follows the canonical source — it is structurally blind to an edit
+    of that source (SchellingChords M6: sonify.py held a private DIATONIC_CHORDS 'based on chords.py'
+    and its gate compared it to the golden; correcting a chord left both stale and the gate green).
+    Two whole-system, product-source signals (no-op until the package is built):
+      * a literal dict/list/set in a product module carrying a 'based on <other module>' style
+        comment — the confession that a human promised to hand-sync two copies (DERIVE, don't copy);
+      * the same collection-constant NAME defined as a literal in >=2 product modules — peer copies
+        of one constant (make one canonical, import it in the others)."""
+    pkg_root = code / package if package else code
+    if not pkg_root.is_dir():
+        return []
+    stems = {f.stem for f in pkg_root.rglob("*.py")}
+    by_name = {}                                         # const name -> {files defining it as literal}
+    violations = []
+    for f in sorted(pkg_root.rglob("*.py")):
+        try:
+            src = f.read_text()
+            tree = ast.parse(src, filename=str(f))
+        except (SyntaxError, OSError):
+            continue
+        lines = src.splitlines()
+        for node in tree.body:                           # module level only
+            if not (isinstance(node, ast.Assign)
+                    and isinstance(node.value, (ast.Dict, ast.List, ast.Set))):
+                continue
+            names = [t.id for t in node.targets if isinstance(t, ast.Name)
+                     and not (t.id.startswith("__") and t.id.endswith("__"))]
+            if not names:
+                continue
+            for nm in names:
+                by_name.setdefault(nm, set()).add(f.name)
+            low = _assign_comment(lines, node).lower()
+            marker = next((m for m in _COPY_MARKERS if m in low), None)
+            if not marker:
+                continue
+            others = [s for s in stems if s != f.stem and re.search(rf"\b{re.escape(s)}\b", low)]
+            if not (others or ".py" in low):             # must reference ANOTHER module's structure
+                continue
+            kind = type(node.value).__name__.lower()
+            where = others[0] if others else "another module"
+            violations.append(
+                f"{f.name}:{node.lineno}: {'/'.join(names)} is a literal {kind} marked "
+                f"'…{marker.strip()}…' referencing {where} — a hand-synced COPY of a canonical "
+                f"constant. A gate comparing this copy to a golden tests TRANSCRIPTION AGREEMENT, "
+                f"not truth, and stays green when the canonical source is edited. DERIVE it (import "
+                f"the canonical definition); keep at most one independent test oracle.")
+    for nm, files in sorted(by_name.items()):
+        if len(files) >= 2:
+            violations.append(
+                f"{nm}: defined as a literal collection in {len(files)} product modules "
+                f"({', '.join(sorted(files))}) — peer copies of one source-of-truth constant. "
+                f"N mutually-agreeing copies enforce ZERO constraints; make one canonical and have "
+                f"the other(s) import/derive from it (keep at most one independent test oracle).")
+    return violations
+
+
 def lint_frozen_tests(code, package: str, spec: dict = None) -> list:
     """Return a list of human-readable cross-reference violations (empty == clean). When `spec`
     is given, also checks that every product module a test imports is a declared deliverable."""
@@ -566,7 +651,8 @@ def run_lint(args) -> int:
     project = load_project(args.dir)
     violations = (lint_spec(project.spec)
                   + lint_frozen_tests(project.code, project.package, project.spec)
-                  + lint_dead_modules(project.code, project.package, project.spec))
+                  + lint_dead_modules(project.code, project.package, project.spec)
+                  + lint_copied_constants(project.code, project.package))
     if not violations:
         print("[raster lint] frozen-test cross-reference: clean")
         return 0
