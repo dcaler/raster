@@ -17,6 +17,38 @@ OLLAMA_TIMEOUT = int(os.environ.get("RASTER_OLLAMA_TIMEOUT", 1800))   # per-chun
 KEEPALIVE = os.environ.get("RASTER_KEEPALIVE", "30m")                 # keep model warm
 HEARTBEAT_SECS = 300
 
+# Context-window sizing (local-llm context-sizing guidance, LL/NN). The KV cache is LINEAR in the
+# context window, not the parameter count, so the window — not the model size — usually decides
+# whether a model fits VRAM. We size num_ctx to the prompt instead of accepting ollama's large
+# default; all knobs are env-overridable for a box with more (or less) VRAM.
+CHARS_PER_TOKEN = int(os.environ.get("RASTER_CHARS_PER_TOKEN", 4))        # rough prompt-token estimate
+OUTPUT_HEADROOM_TOKENS = int(os.environ.get("RASTER_OUTPUT_HEADROOM_TOKENS", 4096))  # room for the reply
+MIN_NUM_CTX = int(os.environ.get("RASTER_MIN_NUM_CTX", 4096))
+MAX_NUM_CTX = int(os.environ.get("RASTER_MAX_NUM_CTX", 32768))
+
+
+def estimate_tokens(chars: int) -> int:
+    """Cheap char->token estimate (ceil, ~4 chars/token). Deliberately rough — we only need the
+    right power-of-two bucket for num_ctx, not an exact count."""
+    return -(-max(chars, 0) // CHARS_PER_TOKEN)
+
+
+def pick_num_ctx(prompt_chars: int, output_tokens: int = OUTPUT_HEADROOM_TOKENS) -> int:
+    """Smallest power-of-two context window that holds the prompt PLUS room for the reply.
+
+    The KV cache is LINEAR in this window (a key+value vector per layer per attention head for every
+    token), so it can dwarf the model weights: an 8B model — ~5 GB of Q4 weights — at a 32k default
+    context needs ~32 GB of KV and spills layers to CPU on an 8 GB card, collapsing generation to
+    <1 tok/s (local-llm context-sizing guidance, LL). The fix is to size to NEED, not accept the
+    server's max default: round UP (NN — a window smaller than prompt+output silently truncates) and
+    clamp to MAX_NUM_CTX. Hitting the clamp means the prompt itself overflows the budget — a
+    hardware/trim problem the caller logs loudly, never a silent truncation here."""
+    need = estimate_tokens(prompt_chars) + max(output_tokens, 0)
+    ctx = MIN_NUM_CTX
+    while ctx < need and ctx < MAX_NUM_CTX:
+        ctx *= 2
+    return min(ctx, MAX_NUM_CTX)
+
 
 def normalize_host(raw: str) -> str:
     """Coerce a bind-style host (e.g. '0.0.0.0:11434') into a usable client URL."""
@@ -35,14 +67,22 @@ def chat(host: str, model: str, messages: list, label: str = "",
          think: bool | None = None) -> str:
     host = normalize_host(host)
     prompt_chars = sum(len(m["content"]) for m in messages)
-    log(f"→ ollama {model} {label}: requesting (prompt {prompt_chars} chars), "
-        f"per-chunk timeout {OLLAMA_TIMEOUT}s …")
+    num_ctx = pick_num_ctx(prompt_chars)
+    log(f"→ ollama {model} {label}: requesting (prompt {prompt_chars} chars ~{estimate_tokens(prompt_chars)} "
+        f"tok, num_ctx={num_ctx}), per-chunk timeout {OLLAMA_TIMEOUT}s …")
+    need = estimate_tokens(prompt_chars) + OUTPUT_HEADROOM_TOKENS
+    if need > MAX_NUM_CTX:
+        # NN: the reply shares the window, so prompt+output must FIT or the context silently
+        # truncates (mysterious quality drop, no error). We've hit the cap — say so loudly.
+        log(f"  WARNING: prompt+output (~{need} tok) exceeds the num_ctx cap {MAX_NUM_CTX} — the "
+            f"window will TRUNCATE. Trim the prompt (API digest) or raise RASTER_MAX_NUM_CTX if the "
+            f"card has the VRAM (KV cache is linear in num_ctx).")
     payload = {
         "model": model,
         "messages": messages,
         "stream": True,
         "keep_alive": KEEPALIVE,
-        "options": {"temperature": 0.1},
+        "options": {"temperature": 0.1, "num_ctx": num_ctx},
     }
     if think is not None:                 # omit -> model default; set only to force off/on
         payload["think"] = think

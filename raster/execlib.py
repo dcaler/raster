@@ -178,14 +178,71 @@ def read_if_exists(project: Project, rel: str) -> str:
     return p.read_text() if p.is_file() else ""
 
 
-def package_sources(project: Project) -> str:
-    """Current package sources — gives the model real signatures to call/extend."""
+def _signature(node) -> str:
+    """One def/class signature line reconstructed from the AST, with NO body."""
+    if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+        kw = "async def " if isinstance(node, ast.AsyncFunctionDef) else "def "
+        ret = f" -> {ast.unparse(node.returns)}" if node.returns else ""
+        return f"{kw}{node.name}({ast.unparse(node.args)}){ret}: ..."
+    bases = ", ".join(ast.unparse(b) for b in node.bases)
+    return f"class {node.name}({bases}):" if bases else f"class {node.name}:"
+
+
+def _doc1(node) -> str:
+    """First non-blank line of a node's docstring as a trailing comment, or '' — just enough to
+    convey intent without shipping the whole docstring."""
+    doc = ast.get_docstring(node)
+    first = next((l.strip() for l in (doc or "").splitlines() if l.strip()), "")
+    return f"  # {first}" if first else ""
+
+
+def api_digest(source: str) -> str:
+    """An API SKELETON of one module: imports, top-level def/class signatures (+ a one-line
+    docstring), class method signatures, and module-level constant NAMES — but NOT function bodies.
+
+    The worker needs to CALL existing code correctly, not re-read its implementation; shipping whole
+    source files is the dominant driver of context size — and thus KV-cache VRAM and prefill latency
+    — on a memory-constrained local box (local-llm context-sizing guidance, MM). Reducing surrounding
+    modules to signatures cut one real prompt from 41,858 -> 13,834 chars (-67%), which in turn
+    halved the auto-sized num_ctx. Full bodies are shown ONLY for the file(s) the task is editing
+    (see `package_api_digest`). Unparseable source falls back to its full text — never hide existing
+    code from the model over a parse error."""
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return source
+    lines = []
+    for node in tree.body:
+        if isinstance(node, (ast.Import, ast.ImportFrom)):
+            lines.append(ast.unparse(node))
+        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            lines.append(_signature(node) + _doc1(node))
+            if isinstance(node, ast.ClassDef):
+                lines += ["    " + _signature(s) for s in node.body
+                          if isinstance(s, (ast.FunctionDef, ast.AsyncFunctionDef))]
+        elif isinstance(node, ast.Assign):
+            lines += [f"{t.id} = ..." for t in node.targets if isinstance(t, ast.Name)]
+        elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
+            lines.append(f"{node.target.id}: {ast.unparse(node.annotation)} = ...")
+    return "\n".join(lines)
+
+
+def package_api_digest(project: Project, full_bodies=()) -> str:
+    """Existing package modules for the prompt: an `api_digest` (signatures only) for every file,
+    EXCEPT those in `full_bodies` (the paths this task is editing), which are shown in FULL. The
+    worker thus sees what it must call across the package, plus the complete body of only what it is
+    changing — the structural prompt trim from the local-llm context-sizing guidance (MM). Replaces
+    the old dump-every-source-file approach that drove prompts (and num_ctx, and VRAM) needlessly
+    large."""
     pkg = project.code / project.package if project.package else project.code
+    full = {str(p).lstrip("/") for p in full_bodies}
     chunks = []
     if pkg.is_dir():
         for f in sorted(pkg.rglob("*.py")):
-            rel = f.relative_to(project.code)
-            chunks.append(f"=== EXISTING: {rel} ===\n{f.read_text()}")
+            rel = f.relative_to(project.code).as_posix()
+            src = f.read_text()
+            chunks.append(f"=== EXISTING (full): {rel} ===\n{src}" if rel in full
+                          else f"=== API: {rel} ===\n{api_digest(src)}")
     return "\n\n".join(chunks)
 
 
@@ -463,6 +520,10 @@ _AUTHOR_INSTRUCTIONS = (
 def build_prompt(project: Project, module: dict, task: dict, authoring: bool) -> str:
     pkg = project.package
     deliverables = task.get("deliverables", [])
+    # The files this task is editing get their FULL body in the prompt; every other package module
+    # is reduced to an API digest (local-llm context-sizing guidance, MM) — the model must CALL them
+    # correctly, not re-read their bodies, and the whole-package dump was the prompt's biggest term.
+    editing = {str(d).lstrip("/") for d in deliverables}
     if not authoring:   # implementation tasks never write tests/ — don't even show them
         deliverables = [d for d in deliverables if not str(d).lstrip("/").startswith("tests/")]
     desc = f" ({project.description})" if project.description else ""
@@ -489,16 +550,18 @@ def build_prompt(project: Project, module: dict, task: dict, authoring: bool) ->
             gate = target.get("gate", {})
             if gate:
                 parts.append(f"## Module gate to author ({gate.get('id')}): {gate.get('spec', '')}")
-        existing = package_sources(project)
+        existing = package_api_digest(project, editing)
         if existing:
-            parts.append("## Current package sources (for accurate imports/signatures):\n" + existing)
+            parts.append("## Existing package API (signatures for accurate imports/calls; full "
+                         "body only for files you are editing):\n" + existing)
     else:
         test_file = task.get("unit_test", {}).get("file", "")
         frozen = read_if_exists(project, test_file)
         if frozen:
             parts.append(f"## FROZEN unit test you MUST satisfy ({test_file}) — do NOT modify it:\n{frozen}")
-        existing = package_sources(project)
+        existing = package_api_digest(project, editing)
         if existing:
-            parts.append("## Current package sources (call these correctly):\n" + existing)
+            parts.append("## Existing package API (call these correctly; full body shown for the "
+                         "file(s) you are editing):\n" + existing)
         parts.append("Write ONLY the implementation file(s) — never the test. Make the frozen test pass.")
     return "\n\n".join(parts)

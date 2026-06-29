@@ -208,6 +208,88 @@ def test_build_loop_surfaces_undefined_names_in_feedback(tmp_path, monkeypatch):
     assert "Path" in seen_feedback[1] and "missing_helper" in seen_feedback[1]
 
 
+# ------------------------------------------- context sizing (LL/NN) + prompt trim (MM)
+def test_pick_num_ctx_scales_and_clamps():
+    from raster.ollama import CHARS_PER_TOKEN, MAX_NUM_CTX, MIN_NUM_CTX, pick_num_ctx
+    # a tiny prompt floors at MIN; the window is always a power of two
+    assert pick_num_ctx(10, output_tokens=0) == MIN_NUM_CTX
+    # a prompt of ~2*MIN tokens lands in the 2*MIN bucket — rounded UP, still a power of two (NN)
+    chars = MIN_NUM_CTX * 2 * CHARS_PER_TOKEN
+    ctx = pick_num_ctx(chars, output_tokens=0)
+    assert ctx == MIN_NUM_CTX * 2 and (ctx & (ctx - 1)) == 0
+    # output headroom counts toward the window BEFORE bucketing -> can bump it up a notch (NN: the
+    # reply shares the context, so size for it too)
+    assert pick_num_ctx(chars, output_tokens=MIN_NUM_CTX * 2) > ctx
+    # clamped to MAX no matter how huge the prompt (the caller logs the truncation risk instead)
+    assert pick_num_ctx(MAX_NUM_CTX * 100, output_tokens=0) == MAX_NUM_CTX
+
+
+def test_estimate_tokens_ceils():
+    from raster.ollama import CHARS_PER_TOKEN, estimate_tokens
+    assert estimate_tokens(0) == 0
+    assert estimate_tokens(1) == 1                          # ceil: any chars -> at least 1 token
+    assert estimate_tokens(CHARS_PER_TOKEN * 3) == 3
+    assert estimate_tokens(CHARS_PER_TOKEN * 3 + 1) == 4    # rounds up, never truncates the estimate
+
+
+def test_api_digest_keeps_signatures_drops_bodies():
+    src = (
+        "import os\n"
+        "from math import sqrt\n"
+        "TABLE = {'a': 1}\n"
+        "DELTA: float = 0.5\n"
+        "def helper(x, y=3):\n"
+        '    """Combine x and y.\n\n    Extra detail line.\n    """\n'
+        "    secret_body_token = x + y\n"
+        "    return secret_body_token\n"
+        "class Widget:\n"
+        '    """A widget."""\n'
+        "    def render(self, n):\n"
+        "        return n * 2\n"
+    )
+    d = execlib.api_digest(src)
+    assert "import os" in d and "from math import sqrt" in d   # imports kept (deps the worker calls)
+    assert "def helper(x, y=3)" in d                           # function signature kept
+    assert "Combine x and y." in d and "Extra detail line." not in d   # only the FIRST docstring line
+    assert "class Widget" in d and "def render(self, n)" in d  # class + method signatures kept
+    assert "TABLE = ..." in d and "DELTA: float" in d          # module-level constant NAMES kept
+    assert "secret_body_token" not in d                        # bodies dropped (the whole point)
+
+
+def test_api_digest_fallback_on_syntax_error():
+    # unparseable source is returned in FULL — never hide existing code over a parse error
+    bad = "def broken(:\n    pass\n"
+    assert execlib.api_digest(bad) == bad
+
+
+def test_package_api_digest_full_body_only_for_edited(tmp_path):
+    project = make_project(tmp_path)
+    pkg = project.code / "pkg"
+    (pkg / "__init__.py").write_text("")
+    (pkg / "helpers.py").write_text(
+        "def existing_helper(a):\n    helper_only_marker = a + 1\n    return helper_only_marker\n")
+    (pkg / "target.py").write_text(
+        "def edit_me():\n    target_full_marker = 1\n    return target_full_marker\n")
+    out = execlib.package_api_digest(project, full_bodies={"pkg/target.py"})
+    # the edited file is shown in FULL (body visible); every other module is signature-only
+    assert "=== EXISTING (full): pkg/target.py ===" in out and "target_full_marker" in out
+    assert "=== API: pkg/helpers.py ===" in out and "def existing_helper(a)" in out
+    assert "helper_only_marker" not in out                     # non-edited module body trimmed away
+
+
+def test_build_prompt_trims_non_edited_modules(tmp_path):
+    project = make_project(tmp_path)
+    pkg = project.code / "pkg"
+    (pkg / "__init__.py").write_text("")
+    (pkg / "other.py").write_text(
+        "def far_away():\n    deep_impl_marker = 7\n    return deep_impl_marker\n")
+    module, task = find_task(SPEC, "M0.T1")   # edits pkg/__init__.py, NOT pkg/other.py
+    prompt = execlib.build_prompt(project, module, task, authoring=False)
+    assert "Existing package API" in prompt
+    assert "def far_away()" in prompt          # signature offered so the worker can call it
+    assert "deep_impl_marker" not in prompt    # but its body is trimmed (context-sizing, MM)
+
+
 def test_write_files_guards(tmp_path):
     project = make_project(tmp_path)
     files = {"pkg/a.py": "x = 1", "tests/t.py": "frozen", "../escape.py": "nope"}

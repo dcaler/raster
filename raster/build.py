@@ -100,7 +100,8 @@ def run_build(args) -> int:
 
         # Re-compose a fixed, minimal prompt each attempt (the prompt is a resource you SPEND,
         # not a log you grow): task spec + frozen contract + current on-disk code (the latest
-        # near-miss, re-read fresh via package_sources) + the SINGLE most-useful failure summary.
+        # near-miss for the file(s) being edited, re-read fresh via package_api_digest; other modules
+        # as signature-only API digests) + the SINGLE most-useful failure summary.
         # Escalation therefore inherits NO transcript — the slow/dear tier gets the smallest good
         # prompt, not the most polluted one (the two cost levers stop pulling against each other).
         prompt = execlib.build_prompt(project, module, task, authoring)

@@ -114,6 +114,7 @@ is self-contained and cross-linked; additions are lettered cumulatively (I…DD)
 - [`false_green_guidance.md`](./false_green_guidance.md) — a green test you distrust: skip-on-`ImportError`, a re-stubbed algorithm passing by tolerance luck, an unsatisfiable framework built to never fail.
 - [`dead_feature_false_green_guidance.md`](./dead_feature_false_green_guidance.md) — a delivered module/param is never imported; invariant-only "negative" tests that can't fail; a knob whose value never changes output.
 - [`duplicated_constant_tautological_test_guidance.md`](./duplicated_constant_tautological_test_guidance.md) — a source-of-truth constant is copied into a consumer and the test compares copy-vs-copy; perturb the canonical source and the test stays green.
+- [`deliverable_blind_test_guidance.md`](./deliverable_blind_test_guidance.md) — a build task's frozen test passes at HEAD before anything is written / never references its deliverable path (tested an inline dict, not the `configs/demo.yaml` it was supposed to produce); false green + runaway worker output. Enforce red-before-green.
 
 **Frozen tests & oracle bugs — the test itself is wrong**
 - [`frozen_test_infra_guidance.md`](./frozen_test_infra_guidance.md) — shared Phase-0 infra (conftest/golden) clobbered by a later task; names a later frozen test imports are missing.
@@ -129,6 +130,7 @@ is self-contained and cross-linked; additions are lettered cumulatively (I…DD)
 - [`doer_write_path_robustness_addendum.md`](./doer_write_path_robustness_addendum.md) — *(addendum)* "NO files parsed" with an opening `=== FILE:` but no terminator; what a format error costs; targeted re-prompt over spec-restate.
 - [`retry_loop_context_economics_guidance.md`](./retry_loop_context_economics_guidance.md) — the prompt grows every retry; the loop escalates to a stronger model on an *identical* repeated failure; prefill/timeout blows up from bloated prompts.
 - [`changing_failure_chain_guidance.md`](./changing_failure_chain_guidance.md) — the failure *changes* each attempt (`NameError: Path`→`datetime`→…); a sound test where the worker is progressing but runtime errors mask each other one-per-attempt, and a structural miss hides behind the chain. The mirror image of a plateau: escalate/give more turns, don't reconcile; add a static `pyflakes` pass.
+- [`local_llm_context_sizing_guidance.md`](./local_llm_context_sizing_guidance.md) — a "small" 8B model at 59 GB / 37% on CPU / ~0.6 tok/s: the KV cache is linear in the *context window* (32k default → ~32 GB), not the parameter count, so it overflows VRAM and spills to CPU. Pin `num_ctx` to the prompt; trim the prompt to API-signature digests (full body only for files being edited).
 
 **Authoring & assignment**
 - [`better_prompting_guidance.md`](./better_prompting_guidance.md) — writing worker task prompts and output contracts.
