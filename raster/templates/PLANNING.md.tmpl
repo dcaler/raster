@@ -167,6 +167,16 @@ in `tasks.yaml`. Rules that make a spec **valid** (get these right or the build 
   sweep/exporter gate must assert the **number and shape** of artifacts (exactly one summary file, one
   row per swept value), not only their values, and the freeze→impl checkpoint should hand-read the
   deliverable against the contract's *intent*, not trust "one more import-fix and it's green."
+- **Red-before-green — a build task's frozen test must FAIL at HEAD.** A test already green on the
+  current tree (before anything is built) isn't testing its deliverable. The classic miss is a
+  data/config/asset deliverable (`configs/demo.yaml`) whose test checks an inline kwargs dict + golden
+  constants and never loads the file by path — green at HEAD with the artifact absent. That's a false
+  green *and* a runaway-output cause: the frozen test is the worker's only gradient toward the
+  deliverable, so with no pull toward it a weak local model emits large, drifting, format-breaking text
+  (M8.T1: 51 passed at HEAD, attempt 1 ran 141 min to zero files). Every deliverable must be located by
+  path (resolved from the test file) and loaded through the **real loader**, not re-encoded inline;
+  `raster lint` flags a build task whose frozen test never references its non-`.py` deliverable, and the
+  freeze→impl checkpoint should confirm each deliverable's test fails at HEAD.
 - **`depends_on`** encodes the DAG; `raster queue` linearizes it into a single-parent
   trundlr chain, so a failure auto-blocks everything downstream. Order tasks so each
   depends on what it actually needs.

@@ -19,6 +19,10 @@ Checks (each maps to an observed defect class):
   * dead-module reachability (lint_dead_modules) — a delivered product module that exists but is
     imported by no other product module is an island: dead code or a subsystem the consumer
     bypassed (reimplemented inline). A whole-system check; self-limits to modules already built.
+  * deliverable-blind test (lint_deliverable_blind_tests) — a build task's frozen test that never
+    references its own data/config/asset deliverable (M8.T1's test checked an inline kwargs dict but
+    never loaded configs/demo.yaml) is green at HEAD with the artifact absent: a false green AND,
+    since the frozen test is the worker's gradient, a runaway-output cause. Red-before-green.
   * copied source-of-truth constant (lint_copied_constants) — a consumer holding a PRIVATE copy of
     a canonical constant (a literal dict/list 'based on <module>', or the same constant name
     defined as a literal in 2+ product modules) makes its own contract gate tautological: it
@@ -723,12 +727,74 @@ def lint_frozen_tests(code, package: str, spec: dict = None) -> list:
     return violations
 
 
+# non-runtime deliverables a unit test would never load by path — packaging/meta/doc files, not
+# the data/config/asset artifacts the deliverable-blind check is about. Excluded to stay false-positive-free.
+_NON_ARTIFACT_FILES = {
+    "pyproject.toml", "setup.py", "setup.cfg", "requirements.txt", "requirements.in",
+    "tox.ini", "manifest.in", ".gitignore", "conftest.py", "makefile",
+}
+
+
+def lint_deliverable_blind_tests(code, package: str, spec: dict) -> list:
+    """A build task's frozen test that never references its own DATA/CONFIG/ASSET deliverable can't
+    be exercising it — and that's two defects at once (deliverable-blind guidance, II/JJ/KK;
+    SchellingChords M8.T1, whose `tests/test_demo_config.py` checked an inline kwargs dict + the
+    golden constants but never loaded its `configs/demo.yaml` deliverable):
+      * FALSE GREEN — the test passes at HEAD with the artifact absent (51 passed, no demo config),
+        so the milestone greens with nothing built; the gap detonates in a downstream consumer.
+      * RUNAWAY OUTPUT — the frozen test is the worker's spec GRADIENT; with no reference to the
+        deliverable the worker gets no pull toward it and a weak local model fills the vacuum with
+        large, drifting, format-breaking output (M8.T1 attempt 1: 141 min, 23k chars, zero files).
+    The decisive, cheap diagnostic the guidance prescribes: grep the frozen test for the deliverable's
+    path/filename — absent means it does not exercise the deliverable (red-before-green is impossible).
+    Scope kept zero-false-positive: only IMPLEMENT tasks (P0.* author the tests themselves), only
+    non-`.py` FILE deliverables (code modules are referenced by IMPORT — covered by module-import
+    resolvability; directories have no single file to grep), and packaging/meta files are excluded.
+    Self-limits to frozen tests that exist on disk, so it's a no-op mid-freeze."""
+    if not spec:
+        return []
+    violations = []
+    for module in spec.get("modules", []):
+        if str(module.get("id", "")).startswith("P0"):    # P0 authors the tests; not an impl task
+            continue
+        for task in module.get("tasks", []):
+            tid = str(task.get("id", ""))
+            if tid.startswith("P0"):
+                continue
+            test_rel = (task.get("unit_test") or {}).get("file", "")
+            if not test_rel:
+                continue
+            test_path = code / test_rel
+            if not test_path.is_file():                   # not authored yet -> nothing to grep
+                continue
+            try:
+                src = test_path.read_text()
+            except OSError:
+                continue
+            for d in task.get("deliverables", []):
+                rel = str(d).lstrip("/")
+                base = rel.rsplit("/", 1)[-1]
+                if (rel.endswith("/") or rel.endswith(".py") or rel.startswith("tests/")
+                        or rel == test_rel or base.lower() in _NON_ARTIFACT_FILES):
+                    continue
+                if rel not in src and base not in src:
+                    violations.append(
+                        f"{tid}: frozen test {test_rel} never references its deliverable {rel!r} "
+                        f"(no {base!r} anywhere in the test) — it cannot exercise the artifact, so it "
+                        f"passes GREEN at HEAD with the deliverable absent (a false green), AND gives "
+                        f"the worker no gradient toward it (a runaway-output cause: the frozen test is "
+                        f"the worker's spec). Load {rel!r} through the REAL loader, by a path resolved "
+                        f"from the test file, and validate it — make the test FAIL at HEAD (red-before-green).")
+    return violations
+
+
 def run_lint(args) -> int:
     project = load_project(args.dir)
     violations = (lint_spec(project.spec)
                   + lint_frozen_tests(project.code, project.package, project.spec)
                   + lint_dead_modules(project.code, project.package, project.spec)
-                  + lint_copied_constants(project.code, project.package))
+                  + lint_copied_constants(project.code, project.package)
+                  + lint_deliverable_blind_tests(project.code, project.package, project.spec))
     if not violations:
         print("[raster lint] frozen-test cross-reference: clean")
         return 0

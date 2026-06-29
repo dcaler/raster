@@ -81,6 +81,16 @@
 #     attempts (not reconcile). (b) A STRUCTURAL/comprehension miss (wrong output SHAPE) can hide behind
 #     the shallow chain and never be reached — so a sweep/exporter gate must assert the NUMBER and SHAPE
 #     of artifacts (exactly one summary file, one row per swept value), not only their values.
+#   * RED-BEFORE-GREEN — A DELIVERABLE'S TEST MUST FAIL AT HEAD. A build task's frozen test that is
+#     already GREEN on the current tree (before anything is written) isn't testing its deliverable; it's
+#     testing something that already exists. The classic miss: a data/config/asset deliverable
+#     (configs/demo.yaml) whose test checks an INLINE kwargs dict + golden constants and never loads the
+#     file by path -> green at HEAD with the artifact absent. That's a false green AND a runaway-output
+#     cause — the frozen test is the worker's only gradient toward the deliverable, so with no pull
+#     toward it a weak local model emits large, drifting, format-breaking output (M8.T1: 51 passed at
+#     HEAD; attempt 1 ran 141 min to zero files). Load every deliverable through the REAL loader, by a
+#     path resolved from the test file, and validate RANGES; raster lint flags a build task whose frozen
+#     test never references its non-.py deliverable.
 #   * GREEN != VERIFIED. A test counts only if it RAN against the product. Don't author
 #     skip-on-ImportError for product modules (it turns a name schism into a permanent false-green
 #     that never runs); import product modules by their EXACT deliverable name. raster surfaces a
@@ -154,7 +164,11 @@
 #     when a task fails on a CHANGING chain of shallow errors (imports, typos, undefined names), don't
 #     assume "one more fix and it's green" — hand-read the deliverable against the contract's INTENT for
 #     a comprehension miss hiding behind the trivia (a sweep emitting per-run trajectory dumps instead of
-#     one summary row per value passes a naive eye and fails the contract; assert artifact NUMBER + SHAPE).
+#     one summary row per value passes a naive eye and fails the contract; assert artifact NUMBER + SHAPE);
+#     (9) RED-BEFORE-GREEN: for each build task, confirm its frozen test FAILS on the current tree with the
+#     deliverable absent and references that deliverable by path (loads a data/config/asset through the real
+#     loader, not an inline re-encoding). A test green at HEAD is blind to its deliverable — a false green,
+#     and since the test is the worker's gradient, a runaway-output cause (raster lint flags the non-.py case).
 
 orchestration:
   task:    {advance_on: unit_test_pass, on_fail: block_next_task}

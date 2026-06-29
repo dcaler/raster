@@ -630,6 +630,76 @@ def test_lint_dead_modules_relative_import(tmp_path):
     assert lint_dead_modules(code, "pkg", spec) == []     # relative import marks metrics reachable
 
 
+def _blind_spec(deliverables):
+    # one IMPLEMENT module/task whose frozen test is tests/test_demo.py
+    return {"meta": {"package": "pkg"}, "modules": [
+        {"id": "M8", "tasks": [
+            {"id": "M8.T1", "deliverables": deliverables,
+             "unit_test": {"file": "tests/test_demo.py", "cmd": "pytest -q"}}]}]}
+
+
+def test_lint_deliverable_blind_tests_flags_missing_reference(tmp_path):
+    from raster.freezelint import lint_deliverable_blind_tests
+    code = tmp_path / "code"
+    tests = code / "tests"
+    tests.mkdir(parents=True)
+    # the M8.T1 fingerprint: the test checks an inline kwargs dict + golden constants and never
+    # references configs/demo.yaml -> green at HEAD with the artifact absent.
+    (tests / "test_demo.py").write_text(
+        "from pkg.config import Config\n"
+        "GOLDEN = {'a': 1}\n"
+        "def test_inline():\n    assert Config(n_chord_types=3).n_chord_types == 3\n")
+    v = "\n".join(lint_deliverable_blind_tests(code, "pkg", _blind_spec(["configs/demo.yaml"])))
+    assert "M8.T1" in v and "demo.yaml" in v               # names the task and the blind deliverable
+    assert "red-before-green" in v.lower()                  # the decisive contract
+
+
+def test_lint_deliverable_blind_tests_clean_when_referenced(tmp_path):
+    from raster.freezelint import lint_deliverable_blind_tests
+    code = tmp_path / "code"
+    tests = code / "tests"
+    tests.mkdir(parents=True)
+    # the test loads the deliverable by path through the real loader -> references it -> clean.
+    (tests / "test_demo.py").write_text(
+        "from pathlib import Path\n"
+        "from pkg.config import load\n"
+        "def test_loads():\n"
+        "    cfg = load(Path(__file__).parent.parent / 'configs' / 'demo.yaml')\n"
+        "    assert cfg.n_chord_types >= 2\n")
+    assert lint_deliverable_blind_tests(code, "pkg", _blind_spec(["configs/demo.yaml"])) == []
+
+
+def test_lint_deliverable_blind_tests_ignores_py_and_packaging(tmp_path):
+    from raster.freezelint import lint_deliverable_blind_tests
+    code = tmp_path / "code"
+    tests = code / "tests"
+    tests.mkdir(parents=True)
+    # a test that references NONE of the deliverables, but they're all out of scope: a .py module
+    # (import-referenced, covered elsewhere), pyproject.toml (packaging, never test-loaded), and a
+    # directory deliverable (no single file to grep).
+    (tests / "test_demo.py").write_text("def test_x():\n    assert True\n")
+    spec = _blind_spec(["pkg/foo.py", "pyproject.toml", "assets/"])
+    assert lint_deliverable_blind_tests(code, "pkg", spec) == []
+
+
+def test_lint_deliverable_blind_tests_skips_authoring_and_unbuilt(tmp_path):
+    from raster.freezelint import lint_deliverable_blind_tests
+    code = tmp_path / "code"
+    tests = code / "tests"
+    tests.mkdir(parents=True)
+    (tests / "test_demo.py").write_text("def test_x():\n    assert True\n")
+    # a P0 AUTHORING task owns its tests; never treated as a deliverable-blind impl task
+    p0 = {"meta": {"package": "pkg"}, "modules": [
+        {"id": "P0", "tasks": [
+            {"id": "P0.M8", "deliverables": ["configs/demo.yaml"],
+             "unit_test": {"file": "tests/test_demo.py", "cmd": "pytest -q"}}]}]}
+    assert lint_deliverable_blind_tests(code, "pkg", p0) == []
+    # and an impl task whose frozen test isn't authored yet -> no-op (self-limits to files on disk)
+    spec = _blind_spec(["configs/missing.yaml"])
+    spec["modules"][0]["tasks"][0]["unit_test"]["file"] = "tests/not_written.py"
+    assert lint_deliverable_blind_tests(code, "pkg", spec) == []
+
+
 def test_freezelint_clean_suite(tmp_path):
     from raster.freezelint import lint_frozen_tests
     code = tmp_path / "code"
