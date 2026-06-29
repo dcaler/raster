@@ -70,6 +70,17 @@
 #     an escalation (a stronger rung reproduces it), raster ABORTS the task to a human oracle check
 #     instead of burning the budget — a stable wrong value is a correct computation against a wrong
 #     EXPECTATION. Design goldens so this can't happen; when it does, fix the frozen value, not the impl.
+#   * A CHANGING FAILURE IS THE OPPOSITE OF A PLATEAU — read the trend of the error STRING, not red/green.
+#     If the failure CHANGES each attempt (error N fixed, N+1 appears), the test is SOUND and the worker
+#     is climbing a real ladder — raster says so in the log and keeps escalating / spending turns (a
+#     reconcile here wrongly blames a correct test). Two traps it defends against: (a) runtime errors MASK
+#     each other (Python raises the first NameError only), so a stack of undefined names peels one per
+#     ~40-min cycle and exhausts a flat MAX_ATTEMPTS — raster runs a sub-second static undefined-name pass
+#     over the just-written code each attempt and feeds the WHOLE list back at once, collapsing the chain
+#     into one repair; on a moving chain that still runs out of turns it tells you to RE-QUEUE with more
+#     attempts (not reconcile). (b) A STRUCTURAL/comprehension miss (wrong output SHAPE) can hide behind
+#     the shallow chain and never be reached — so a sweep/exporter gate must assert the NUMBER and SHAPE
+#     of artifacts (exactly one summary file, one row per swept value), not only their values.
 #   * GREEN != VERIFIED. A test counts only if it RAN against the product. Don't author
 #     skip-on-ImportError for product modules (it turns a name schism into a permanent false-green
 #     that never runs); import product modules by their EXACT deliverable name. raster surfaces a
@@ -139,7 +150,11 @@
 #     every `len(CONSTANT) == literal` integrity assertion, name the LAYER the number lives in
 #     (structure vs run knob) and confirm the literal isn't a parameter value in disguise — prefer the
 #     derived `len(VOCAB) == len(source())`; and confirm no buggy sanity-guard can sink a deliverable
-#     that actually passes (isolate guards or scrutinize them as hard as the contract beside them).
+#     that actually passes (isolate guards or scrutinize them as hard as the contract beside them); (8)
+#     when a task fails on a CHANGING chain of shallow errors (imports, typos, undefined names), don't
+#     assume "one more fix and it's green" — hand-read the deliverable against the contract's INTENT for
+#     a comprehension miss hiding behind the trivia (a sweep emitting per-run trajectory dumps instead of
+#     one summary row per value passes a naive eye and fails the contract; assert artifact NUMBER + SHAPE).
 
 orchestration:
   task:    {advance_on: unit_test_pass, on_fail: block_next_task}

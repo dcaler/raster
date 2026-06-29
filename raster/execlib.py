@@ -6,6 +6,8 @@ project description are read from the Project (raster.yaml / tasks.yaml meta), n
 hardcoded. Commits use the machine config's non-PII identity with NO co-authorship.
 """
 
+import ast
+import builtins
 import os
 import re
 import subprocess
@@ -79,6 +81,96 @@ def reprompt_for_parse_failure(diag: dict, root: str = "code") -> str:
             "wrapped EXACTLY as `=== FILE: <path> ===`, then the full contents, then a line "
             f"`=== END FILE ===` — no prose, no markdown fences. Paths relative to the {root}/ "
             f"root, not prefixed with {root}/.")
+
+
+# Names that are always resolvable without an explicit binding: every builtin, plus the module
+# dunders the interpreter injects. Used by the static undefined-name pass below.
+_ALWAYS_BOUND = set(dir(builtins)) | {
+    "__file__", "__name__", "__doc__", "__builtins__", "__spec__", "__loader__",
+    "__package__", "__path__", "__dict__", "__class__", "__module__", "__qualname__",
+    "__annotations__", "__all__",
+}
+
+
+def _bound_names(tree: ast.AST) -> set:
+    """Every name BOUND anywhere in `tree`, scope-INSENSITIVELY (a flat over-approximation):
+    Store-context targets (assign / for / with-as / comprehension / walrus), function & class
+    names, every parameter, import aliases, except-handler names, and global/nonlocal declarations.
+    Scope-insensitive ON PURPOSE — a name bound in ANY scope is treated as defined — so this can
+    only ever UNDER-report an undefined name, never invent one. Zero false positives is the whole
+    point: a finding here must be a name that is genuinely unbound module-wide."""
+    bound = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store):
+            bound.add(node.id)
+        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            bound.add(node.name)
+        elif isinstance(node, ast.arg):
+            bound.add(node.arg)
+        elif isinstance(node, (ast.Import, ast.ImportFrom)):
+            for a in node.names:
+                bound.add((a.asname or a.name).split(".")[0])
+        elif isinstance(node, ast.ExceptHandler) and node.name:
+            bound.add(node.name)
+        elif isinstance(node, (ast.Global, ast.Nonlocal)):
+            bound.update(node.names)
+    return bound
+
+
+def _undefined_in_tree(tree: ast.AST) -> list:
+    """Conservative undefined-name findings in one module tree: Load-context names bound in NO
+    scope and not builtin, returned as [(lineno, name)] (first use of each, in order). BAILS
+    (returns []) when the file `import *`s or uses a `match` statement — there we can't see every
+    binding, so a finding could be wrong and we'd rather miss than misfire."""
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and any(a.name == "*" for a in node.names):
+            return []
+        if hasattr(ast, "Match") and isinstance(node, ast.Match):
+            return []
+    bound = _bound_names(tree) | _ALWAYS_BOUND
+    seen, out = set(), []
+    for node in ast.walk(tree):
+        if (isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load)
+                and node.id not in bound and node.id not in seen):
+            seen.add(node.id)
+            out.append((node.lineno, node.id))
+    return out
+
+
+def undefined_names(project: Project) -> list:
+    """Scan the product package for names USED but defined in no scope and not builtin — the
+    masking-runtime-error class (a missing `import Path`, a never-defined helper `jaccard_distance`).
+    The interpreter raises only the FIRST such NameError per run, so a stack of them peels one per
+    ~test-cycle (~40 min each); surfacing the WHOLE list at once collapses that chain into a single
+    repair turn (changing-failure-chain guidance, FF). Conservative & scope-insensitive (see
+    `_bound_names`): it only flags names bound NOWHERE in their file, so it under-reports rather than
+    ever inventing a finding — it feeds the worker extra signal, it never red-lights a build on its
+    own. Returns [(relpath, lineno, name)]; [] when clean or the package isn't built yet."""
+    pkg = project.code / project.package if project.package else project.code
+    if not pkg.is_dir():
+        return []
+    out = []
+    for f in sorted(pkg.rglob("*.py")):
+        try:
+            tree = ast.parse(f.read_text(), filename=str(f))
+        except (SyntaxError, OSError):
+            continue                       # a syntax error is a louder failure the test already shows
+        rel = f.relative_to(project.code).as_posix()
+        for lineno, name in _undefined_in_tree(tree):
+            out.append((rel, lineno, name))
+    return out
+
+
+def reprompt_for_undefined_names(findings: list) -> str:
+    """A targeted note listing EVERY undefined name at once (file:line) so ONE repair turn defines
+    or imports them all — instead of the interpreter revealing one per run and the loop peeling a
+    single layer per ~cycle (changing-failure-chain guidance, FF)."""
+    items = "; ".join(f"`{name}` (used at {rel}:{lineno})" for rel, lineno, name in findings)
+    n = len(findings)
+    return (f"A static pass found {n} name{'s' if n != 1 else ''} used but defined NOWHERE and not "
+            f"a builtin — each raises NameError when its line runs: {items}. Python reveals only the "
+            "FIRST per run, so fix them ALL in this one pass (add the missing import, or define the "
+            "function/variable) rather than one per attempt. Re-emit ALL files in full.")
 
 
 def read_if_exists(project: Project, rel: str) -> str:
@@ -355,7 +447,16 @@ _AUTHOR_INSTRUCTIONS = (
     "waiting to be wrong, and a derived one CANNOT be conflated with a knob. Reserve bare literals "
     "for genuinely axiomatic facts. And ISOLATE integrity/sanity guards from the real acceptance "
     "test: a bug in a decorative guard must not be able to fail a deliverable that actually passed, "
-    "so give guards their own file/task or hold them to the same scrutiny as the contract beside them."
+    "so give guards their own file/task or hold them to the same scrutiny as the contract beside them.\n"
+    "PIN THE OUTPUT SHAPE, NOT ONLY ITS VALUES. A COMPREHENSION miss — right numbers in the wrong "
+    "CONTAINER — sails through value-only assertions and can hide behind any shallow error (a missing "
+    "import, a typo) upstream of it, so the worker burns its whole budget peeling trivia and never "
+    "reaches the structural defect. For any deliverable that PRODUCES ARTIFACTS (files, rows, records), "
+    "assert the NUMBER and SHAPE explicitly, not just the contents: a parameter SWEEP emits exactly ONE "
+    "summary artifact (assert it — `len(list(out.glob('*.csv'))) == 1`) with ONE ROW PER SWEPT VALUE "
+    "(the swept value in a named column plus the aggregate observables), NOT one file per run dumping "
+    "each run's raw per-step trajectory. State the file/row/column contract so a worker that built the "
+    "wrong shape fails the frozen test instead of passing a naive eye."
 )
 
 

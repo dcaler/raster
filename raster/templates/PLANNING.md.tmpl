@@ -152,6 +152,21 @@ in `tasks.yaml`. Rules that make a spec **valid** (get these right or the build 
   (`len(VOCAB) == len(diatonic_major())`), don't hand-type it; `raster lint` flags the pinned-to-a-knob
   form. And **isolate integrity/sanity guards** from the real acceptance test — a bug in a decorative
   guard must not be able to fail a deliverable that actually passed.
+- **A *changing* failure each attempt is the mirror image of a plateau — escalate, don't reconcile.**
+  Read the trend of the error *string*, not just red/green. A **same** failure across attempts (the
+  byte-identical wrong value, surviving escalation) means the **oracle** is broken — raster aborts to a
+  human reconcile. A **changing** failure (error N fixed, N+1 appears) means the test is **sound** and
+  the worker is climbing a real ladder — the right lever is more turns / a higher tier, not a reconcile
+  (which wrongly blames a correct test). Two traps the doer defends against, worth designing for: (a)
+  runtime errors **mask each other** — Python raises only the first `NameError`, so a stack of undefined
+  names (`Path`→`datetime`→a missing helper) peels one per ~40-min cycle and exhausts a flat
+  `MAX_ATTEMPTS`; raster runs a sub-second static undefined-name pass each attempt and feeds the *whole*
+  list back at once, and on a moving chain that still runs out of turns it recommends a **re-queue with
+  more attempts** (pure waste on a plateau, the right call here). (b) A **structural/comprehension miss**
+  can hide *behind* the shallow chain and never be reached before the budget runs out — so any
+  sweep/exporter gate must assert the **number and shape** of artifacts (exactly one summary file, one
+  row per swept value), not only their values, and the freeze→impl checkpoint should hand-read the
+  deliverable against the contract's *intent*, not trust "one more import-fix and it's green."
 - **`depends_on`** encodes the DAG; `raster queue` linearizes it into a single-parent
   trundlr chain, so a failure auto-blocks everything downstream. Order tasks so each
   depends on what it actually needs.

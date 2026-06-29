@@ -127,6 +127,87 @@ def test_build_loop_aborts_on_plateau_before_escalating(tmp_path, monkeypatch):
     assert len(sizes) == 2                                 # aborted on the 2nd identical failure
 
 
+def test_build_loop_moving_chain_recommends_requeue(tmp_path, monkeypatch, capsys):
+    # A CHANGING failure each attempt (a moving chain, NOT a plateau) runs the full budget; raster
+    # logs the changed signature as PROGRESS mid-loop (EE) and the final log flags a re-queue, the
+    # mirror image of the plateau's reconcile (GG). The driver writes clean code, so no undef pass.
+    rc, sizes = _drive_build(tmp_path, monkeypatch,
+                             lambda i: f"E   assert {i} == 99\nFAILED tests/test_smoke.py::test_x")
+    assert rc == 1 and len(sizes) == 4
+    out = capsys.readouterr().out
+    assert "signature CHANGED" in out                      # EE diagnostic fires mid-loop
+    assert "MOVING chain" in out and "RE-QUEUE" in out      # GG: more attempts, not a reconcile
+
+
+# ---------------------------------------------------- undefined-name pass (FF) + reprompt
+def test_undefined_names_detects(tmp_path):
+    project = make_project(tmp_path)
+    (project.code / "pkg" / "__init__.py").write_text("")
+    (project.code / "pkg" / "m.py").write_text(
+        "import os\n"
+        "def f(a):\n"
+        "    return os.path.join(a, missing(b))\n")        # `missing` and `b` unbound; `a`,`os` bound
+    found = {name for _, _, name in execlib.undefined_names(project)}
+    assert found == {"missing", "b"}
+
+
+def test_undefined_names_clean_and_bails_on_star(tmp_path):
+    project = make_project(tmp_path)
+    (project.code / "pkg" / "__init__.py").write_text("")
+    # walrus, comprehension target, and except-as all count as BOUND -> zero false positives
+    (project.code / "pkg" / "clean.py").write_text(
+        "def g(items):\n"
+        "    try:\n"
+        "        n = sum((y := x) for x in items)\n"
+        "    except ValueError as e:\n"
+        "        n = repr(e)\n"
+        "    return n\n")
+    assert execlib.undefined_names(project) == []
+    # a star import hides its bindings -> bail on that file rather than risk a false finding
+    (project.code / "pkg" / "star.py").write_text("from os import *\nv = getcwd()\nq = whatever\n")
+    assert all(rel != "pkg/star.py" for rel, _, _ in execlib.undefined_names(project))
+
+
+def test_undefined_names_noop_when_unbuilt(tmp_path):
+    project = make_project(tmp_path)                        # pkg/ exists but empty
+    assert execlib.undefined_names(project) == []
+
+
+def test_reprompt_for_undefined_names_lists_all():
+    note = execlib.reprompt_for_undefined_names(
+        [("pkg/m.py", 3, "Path"), ("pkg/m.py", 5, "jaccard_distance")])
+    assert "Path" in note and "jaccard_distance" in note   # the WHOLE list, not just the first
+    assert "ALL" in note                                   # instruct fixing every one in one pass
+
+
+def test_build_loop_surfaces_undefined_names_in_feedback(tmp_path, monkeypatch):
+    # FF: the worker emits product code with undefined names; the static pass surfaces them and the
+    # loop folds the FULL list into the next attempt's feedback (one repair clears the chain).
+    from types import SimpleNamespace
+    from raster import build, ollama
+    project = make_project(tmp_path)
+    monkeypatch.setattr(build, "load_project", lambda d: project)
+    seen_feedback = []
+
+    def fake_chat(host, model, messages, label="", think=False):
+        seen_feedback.append("\n".join(m["content"] for m in messages[1:]))   # the feedback msg(s)
+        return ("=== FILE: pkg/__init__.py ===\n"
+                "import os\nval = Path(os.getcwd()) / missing_helper()\n"
+                "=== END FILE ===\n")
+
+    def fake_run_test(proj, cmd, stub_pkg=None):
+        return False, "E   NameError: name 'Path' is not defined\nFAILED tests/test_smoke.py::test_x"
+
+    monkeypatch.setattr(ollama, "chat", fake_chat)
+    monkeypatch.setattr(execlib, "run_test", fake_run_test)
+    monkeypatch.setattr(execlib, "git_commit_push", lambda *a, **k: None)
+    args = SimpleNamespace(dir=str(tmp_path), task="M0.T1", dry_run=False, max_attempts=2)
+    assert build.run_build(args) == 1
+    # attempt 2's feedback names BOTH undefined names at once — not just the first NameError pytest
+    # reported (`Path`) but also the masked `missing_helper` the interpreter never reached.
+    assert "Path" in seen_feedback[1] and "missing_helper" in seen_feedback[1]
+
+
 def test_write_files_guards(tmp_path):
     project = make_project(tmp_path)
     files = {"pkg/a.py": "x = 1", "tests/t.py": "frozen", "../escape.py": "nope"}

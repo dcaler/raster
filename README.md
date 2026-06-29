@@ -101,3 +101,37 @@ together, think-off-first / think-on-retry), commit-and-push on each green
 task/gate). A task's `worker` is its starting tier *and* its floor — assign it by
 cost-of-error (see the planning playbook). `plan` launches an interactive Claude
 session seeded with the planning playbook (or `--no-launch` to drive it by hand).
+
+---
+
+## Guidance corpus (agent-facing)
+
+Lessons distilled from real build failures — written for a future Claude working on
+a raster/doer build, not for setup. **Match your symptom, then open the file.** Each
+is self-contained and cross-linked; additions are lettered cumulatively (I…DD).
+
+**False greens — a test passes but proves nothing**
+- [`false_green_guidance.md`](./false_green_guidance.md) — a green test you distrust: skip-on-`ImportError`, a re-stubbed algorithm passing by tolerance luck, an unsatisfiable framework built to never fail.
+- [`dead_feature_false_green_guidance.md`](./dead_feature_false_green_guidance.md) — a delivered module/param is never imported; invariant-only "negative" tests that can't fail; a knob whose value never changes output.
+- [`duplicated_constant_tautological_test_guidance.md`](./duplicated_constant_tautological_test_guidance.md) — a source-of-truth constant is copied into a consumer and the test compares copy-vs-copy; perturb the canonical source and the test stays green.
+
+**Frozen tests & oracle bugs — the test itself is wrong**
+- [`frozen_test_infra_guidance.md`](./frozen_test_infra_guidance.md) — shared Phase-0 infra (conftest/golden) clobbered by a later task; names a later frozen test imports are missing.
+- [`frozen_test_infra_guidance_addendum.md`](./frozen_test_infra_guidance_addendum.md) — *(addendum)* cross-reference lint; derive fixture constants from one source rather than duplicating.
+- [`golden_oracle_consistency_guidance.md`](./golden_oracle_consistency_guidance.md) — a test hand-computes an expected value under assumed metric properties but builds the metric from a half-matrix golden; a worker plateaus on one exact wrong number.
+- [`constant_vs_parameter_conflation_guidance.md`](./constant_vs_parameter_conflation_guidance.md) — `len(CONSTANT) == N` fails `assert 7 == 3` and N is also a config parameter; a buggy sanity-guard fails a deliverable that actually passed.
+
+**Gate design — asserting the wrong property**
+- [`stochastic_gate_sampling_guidance.md`](./stochastic_gate_sampling_guidance.md) — a gate asserts per-step monotonicity or a hard threshold on a noisy, seed-averaged metric; the verdict flips when you change the seed list.
+
+**Doer / retry-loop mechanics**
+- [`doer_write_path_robustness.md`](./doer_write_path_robustness.md) — the worker produced code but nothing reached disk; path/format mismatches; spurious `code/` prefix.
+- [`doer_write_path_robustness_addendum.md`](./doer_write_path_robustness_addendum.md) — *(addendum)* "NO files parsed" with an opening `=== FILE:` but no terminator; what a format error costs; targeted re-prompt over spec-restate.
+- [`retry_loop_context_economics_guidance.md`](./retry_loop_context_economics_guidance.md) — the prompt grows every retry; the loop escalates to a stronger model on an *identical* repeated failure; prefill/timeout blows up from bloated prompts.
+- [`changing_failure_chain_guidance.md`](./changing_failure_chain_guidance.md) — the failure *changes* each attempt (`NameError: Path`→`datetime`→…); a sound test where the worker is progressing but runtime errors mask each other one-per-attempt, and a structural miss hides behind the chain. The mirror image of a plateau: escalate/give more turns, don't reconcile; add a static `pyflakes` pass.
+
+**Authoring & assignment**
+- [`better_prompting_guidance.md`](./better_prompting_guidance.md) — writing worker task prompts and output contracts.
+- [`task_Assignment_guidelines.md`](./task_Assignment_guidelines.md) — assigning tasks to model tiers by cost-of-error; what to freeze.
+
+Recurring meta-lesson across the corpus: **read the trend of the error string, not just red/green.** A *same-failure plateau* (the worker returning the byte-identical wrong result across attempts, surviving model escalation) signals a broken task/oracle, not a weak model — stop and reconcile (a human "Cale+Claude" call), do **not** let auto-escalation spend the strong-model budget on it. A *changing failure chain* (a different error each attempt) is the mirror image: the test is sound and the worker is progressing, so escalate / give more turns — but watch for runtime errors masking each other and a structural miss hiding behind the chain (see `changing_failure_chain_guidance.md`). Same observation — does the error move? — routes you to opposite actions.

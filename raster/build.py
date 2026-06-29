@@ -86,6 +86,7 @@ def run_build(args) -> int:
     log(f"  ollama={host}  test_cmd={unit_cmd!r}  cwd={project.code}")
 
     prev_sig = None     # last attempt's failure signature, for the same-failure plateau abort
+    chain_moved = False # did the failure signature CHANGE across attempts? (a moving chain, not a plateau)
     feedback = None     # the SINGLE most-useful prior-failure summary — re-composed, never grown
     for attempt in range(1, max_attempts + 1):
         idx = rung_index(start, attempt, ESCALATE_AFTER, len(ladder))
@@ -134,6 +135,18 @@ def run_build(args) -> int:
         execlib.write_files(project, files, allow_tests=authoring,
                             owners=owners, task_id=args.task)
 
+        # Widen the feedback channel (FF): a runtime NameError chain (`Path`→`datetime`→a missing
+        # helper) is revealed ONE defect per ~40-min test cycle, so four stacked undefined names
+        # exhaust the budget before the real bug is reached. A sub-second static pass over the
+        # just-written product code surfaces them ALL at once; folded into this attempt's failure
+        # feedback, the next attempt fixes the whole chain in one turn. Conservative (flags only
+        # names bound nowhere), so it only ever ADDS signal — it never red-lights a passing test.
+        undef = [] if authoring else execlib.undefined_names(project)
+        if undef:
+            log(f"attempt {attempt}: static pass found {len(undef)} undefined name(s) "
+                f"{sorted({u[2] for u in undef})} — each NameErrors when reached; surfacing the "
+                f"FULL list so one repair fixes the chain, not one defect per ~cycle.")
+
         log(f"attempt {attempt}: running test: {unit_cmd}")
         t_test = time.monotonic()
         ok, output = execlib.run_test(project, unit_cmd, stub_pkg=stub_pkg)
@@ -176,6 +189,15 @@ def run_build(args) -> int:
                     f"escalating into / burning the remaining attempts. "
                     f"Signature:\n    {sig.replace(chr(10), chr(10) + '    ')}")
                 return 1
+            if sig and prev_sig and sig != prev_sig:
+                # The MIRROR image of the plateau (EE): the failure CHANGED, so the worker fixed the
+                # last error and surfaced the next — genuine progress against a SOUND test. The right
+                # lever is escalation / more turns, NOT a human oracle reconcile (that wrongly blames
+                # a correct test). Read the trend of the error STRING, not just red/green.
+                chain_moved = True
+                log(f"attempt {attempt}: failure signature CHANGED from the prior attempt — the "
+                    f"worker is making real PROGRESS against a sound test (the mirror image of a "
+                    f"plateau). Escalating / giving more turns is correct here, not an oracle check.")
             prev_sig = sig
 
         # Logic failure: keep ONLY the latest failing output + a targeted fix as next attempt's
@@ -192,8 +214,26 @@ def run_build(args) -> int:
                    "Do NOT write implementation.")
         else:
             fix = "Fix the implementation and re-emit ALL files in full."
+            if undef:
+                # Lead with the WHOLE undefined-name list (FF) so the next attempt clears the entire
+                # chain at once instead of the test revealing one NameError per ~cycle.
+                fix = execlib.reprompt_for_undefined_names(undef) + "\n\n" + fix
         feedback = f"Your previous attempt failed `{unit_cmd}`:\n\n{output[-MAX_OUTPUT_CHARS:]}\n\n" + fix
 
-    log(f"FAILED build={args.task} after {max_attempts} attempts. "
-        f"Inspect {project.code} or re-run with more RASTER_MAX_ATTEMPTS.")
+    if chain_moved:
+        # A MOVING chain that exhausted the budget (GG): unlike a plateau (already aborted above),
+        # the worker WAS progressing against a sound test and simply ran out of turns — often because
+        # runtime errors mask each other (one revealed per ~cycle), so MAX_ATTEMPTS as a flat constant
+        # under-budgets a deep error stack. More attempts is the right call here (it is pure waste on a
+        # plateau). But first rule out a STRUCTURAL miss hiding behind the shallow chain (HH) — no
+        # number of import-fixes converges on the wrong output shape.
+        log(f"FAILED build={args.task} after {max_attempts} attempts — but the failure CHANGED across "
+            f"attempts (a MOVING chain, NOT a plateau): the worker was progressing against a sound test "
+            f"and ran out of turns. RE-QUEUE with more RASTER_MAX_ATTEMPTS or a higher floor tier — this "
+            f"is not plateau waste. FIRST hand-read the deliverable against the contract: a structural / "
+            f"comprehension miss (wrong output SHAPE — e.g. one file per value vs one summary row per "
+            f"value) can hide behind a chain of shallow errors and never be reached before the budget runs out.")
+    else:
+        log(f"FAILED build={args.task} after {max_attempts} attempts. "
+            f"Inspect {project.code} or re-run with more RASTER_MAX_ATTEMPTS.")
     return 1
