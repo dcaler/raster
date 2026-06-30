@@ -348,17 +348,21 @@ def _freeze_stub_env(stub_pkg: str) -> dict:
     return env
 
 
-def run_test(project: Project, cmd: str, stub_pkg: str = None):
+def run_test(project: Project, cmd: str, stub_pkg: str = None, timeout: int = None):
     """Run a pytest command in code/. `stub_pkg` (the product package) injects the
     freeze-phase absent-product stub — pass it ONLY for freeze collects (P0.* authoring
-    and `--collect-only` freeze gates), never for an implementation gate."""
+    and `--collect-only` freeze gates), never for an implementation gate. `timeout`
+    overrides the global TEST_TIMEOUT for a task/gate that is LEGITIMATELY long (a per-task
+    `budget:` in tasks.yaml — e.g. a GA/optimizer gate that runs minutes per evaluation), so
+    a slow-but-progressing run isn't killed and misread as a failure."""
     env = _freeze_stub_env(stub_pkg) if stub_pkg else None
+    limit = timeout if timeout and timeout > 0 else TEST_TIMEOUT
     try:
         proc = subprocess.run(cmd, shell=True, cwd=project.code, env=env,
-                              capture_output=True, text=True, timeout=TEST_TIMEOUT)
+                              capture_output=True, text=True, timeout=limit)
     except subprocess.TimeoutExpired as e:
         out = (e.stdout or "") + (e.stderr or "")
-        return False, out + f"\n[raster] test command timed out after {TEST_TIMEOUT}s"
+        return False, out + f"\n[raster] test command timed out after {limit}s"
     return proc.returncode == 0, (proc.stdout + proc.stderr)
 
 

@@ -23,6 +23,7 @@ def run_assess(args) -> int:
         kind = "gate"
         title = gate.get("spec", module.get("name", ""))
         on_pass_msg = f"gate {tid} pass — {module.get('name', '')}".rstrip(" —")
+        budget = gate.get("budget")
     else:
         module, task = find_task(project.spec, tid)
         if not task:
@@ -32,6 +33,7 @@ def run_assess(args) -> int:
         kind = "test"
         title = task.get("title", "")
         on_pass_msg = None        # a bare unit-test assessment doesn't advance the build
+        budget = task.get("budget")
 
     if args.dry_run:
         print(f"[{kind} {tid}] cwd={project.code}\n{cmd}")
@@ -44,7 +46,9 @@ def run_assess(args) -> int:
     log(f"START {kind}={tid} ({title!r:.80})")
     log(f"  cmd={cmd!r}  cwd={project.code}")
     t = time.monotonic()
-    ok, output = execlib.run_test(project, cmd, stub_pkg=stub_pkg)
+    # a per-gate/task `budget:` (seconds) overrides the global timeout for a legitimately long
+    # gate (e.g. a GA/optimizer over seeded simulation runs); see execlib.run_test.
+    ok, output = execlib.run_test(project, cmd, stub_pkg=stub_pkg, timeout=budget)
 
     # A freeze gate (collect-only) also runs the Layer-1 cross-reference linter: it catches
     # mechanically-checkable freeze defects (unresolvable golden keys, undefined fixtures,

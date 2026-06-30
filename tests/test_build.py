@@ -96,7 +96,7 @@ def _drive_build(tmp_path, monkeypatch, run_test_output):
         sizes.append(sum(len(m["content"]) for m in messages))
         return "=== FILE: pkg/__init__.py ===\nx = 1\n=== END FILE ===\n"   # well-formed, will FAIL
 
-    def fake_run_test(proj, cmd, stub_pkg=None):
+    def fake_run_test(proj, cmd, stub_pkg=None, timeout=None):
         n["i"] += 1
         return False, run_test_output(n["i"])
 
@@ -232,7 +232,7 @@ def test_build_loop_surfaces_undefined_names_in_feedback(tmp_path, monkeypatch):
                 "import os\nval = Path(os.getcwd()) / missing_helper()\n"
                 "=== END FILE ===\n")
 
-    def fake_run_test(proj, cmd, stub_pkg=None):
+    def fake_run_test(proj, cmd, stub_pkg=None, timeout=None):
         return False, "E   NameError: name 'Path' is not defined\nFAILED tests/test_smoke.py::test_x"
 
     monkeypatch.setattr(ollama, "chat", fake_chat)
@@ -457,6 +457,30 @@ def test_declared_modules():
 def test_skipped_count():
     assert execlib.skipped_count("=== 50 passed, 3 skipped in 1.2s ===") == 3
     assert execlib.skipped_count("=== 50 passed in 1.2s ===") == 0
+
+
+def test_run_test_honors_per_task_budget(tmp_path, monkeypatch):
+    # a per-task `budget:` (seconds) overrides the global TEST_TIMEOUT so a legitimately long
+    # gate (a GA over seeded sim runs) isn't killed and misread as a failure.
+    import subprocess
+    from raster.execlib import TEST_TIMEOUT
+    project = make_project(tmp_path)
+    seen = {}
+
+    class _Done:
+        returncode, stdout, stderr = 0, "1 passed", ""
+
+    def fake_run(cmd, **kw):
+        seen["timeout"] = kw.get("timeout")
+        return _Done()
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    execlib.run_test(project, "pytest -q", timeout=1800)
+    assert seen["timeout"] == 1800                         # the override is used
+    execlib.run_test(project, "pytest -q")                 # no override -> the global default
+    assert seen["timeout"] == TEST_TIMEOUT
+    execlib.run_test(project, "pytest -q", timeout=None)   # falsy budget -> global default, not None
+    assert seen["timeout"] == TEST_TIMEOUT
 
 
 def test_freezelint_phantom_attr_spy_sweeps_whole_tree(tmp_path):

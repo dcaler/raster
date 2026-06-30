@@ -152,7 +152,9 @@ def run_build(args) -> int:
 
         log(f"attempt {attempt}: running test: {unit_cmd}")
         t_test = time.monotonic()
-        ok, output = execlib.run_test(project, unit_cmd, stub_pkg=stub_pkg)
+        # a per-task `budget:` (seconds) overrides the global timeout for a legitimately long
+        # test (e.g. a GA/optimizer gate) so a slow-but-progressing run isn't killed as a failure.
+        ok, output = execlib.run_test(project, unit_cmd, stub_pkg=stub_pkg, timeout=task.get("budget"))
         log(f"attempt {attempt}: test finished in {fmt_secs(time.monotonic() - t_test)} "
             f"-> {'PASS' if ok else 'FAIL'} | {execlib.summarize_pytest(output)}")
         if ok and not authoring and execlib.skipped_count(output):
