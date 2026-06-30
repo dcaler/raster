@@ -863,14 +863,20 @@ def lint_phantom_attr_spies(code, package: str) -> list:
     return violations
 
 
+def lint_violations(project) -> list:
+    """The full static cross-reference violation list for a loaded Project (empty == clean).
+    Shared by `raster lint` and the freeze-review gate so both see the identical Layer-1 checks."""
+    return (lint_spec(project.spec)
+            + lint_frozen_tests(project.code, project.package, project.spec)
+            + lint_dead_modules(project.code, project.package, project.spec)
+            + lint_copied_constants(project.code, project.package)
+            + lint_deliverable_blind_tests(project.code, project.package, project.spec)
+            + lint_phantom_attr_spies(project.code, project.package))
+
+
 def run_lint(args) -> int:
     project = load_project(args.dir)
-    violations = (lint_spec(project.spec)
-                  + lint_frozen_tests(project.code, project.package, project.spec)
-                  + lint_dead_modules(project.code, project.package, project.spec)
-                  + lint_copied_constants(project.code, project.package)
-                  + lint_deliverable_blind_tests(project.code, project.package, project.spec)
-                  + lint_phantom_attr_spies(project.code, project.package))
+    violations = lint_violations(project)
     if not violations:
         print("[raster lint] frozen-test cross-reference: clean")
         return 0

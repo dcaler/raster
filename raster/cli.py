@@ -51,6 +51,10 @@ def build_parser() -> argparse.ArgumentParser:
     lint = sub.add_parser("lint", help="cross-reference linter over the frozen test suite")
     _common(lint)
 
+    freeze_review = sub.add_parser("freeze-review",
+                                   help="pre-queue gate: lint + executed red-before-green over the frozen suite")
+    _common(freeze_review)
+
     return ap
 
 
@@ -74,6 +78,9 @@ def main(argv=None) -> int:
     if args.cmd == "lint":
         from raster.freezelint import run_lint
         return run_lint(args)
+    if args.cmd == "freeze-review":
+        from raster.freeze_review import run_freeze_review
+        return run_freeze_review(args)
     return 1
 
 

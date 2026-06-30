@@ -494,6 +494,56 @@ def test_freezelint_phantom_attr_spy_noop_until_built(tmp_path):
     assert lint_phantom_attr_spies(code, "pkg") == []             # no product tokens yet -> no-op mid-freeze
 
 
+def _clean_review_project(tmp_path):
+    # a spec whose lint is clean: P0 owns the frozen tests, M0.T1 delivers only product code.
+    spec = {"meta": {"package": "pkg", "project": "P"}, "modules": [
+        {"id": "P0", "tasks": [{"id": "P0.M0", "deliverables": ["tests/test_smoke.py", "tests/gate.py"],
+                                "unit_test": {"file": "tests/test_smoke.py", "cmd": "pytest --collect-only -q tests/"}}]},
+        {"id": "M0", "tasks": [{"id": "M0.T1", "deliverables": ["pkg/__init__.py"],
+                                "unit_test": {"file": "tests/test_smoke.py", "cmd": "pytest -q tests/test_smoke.py"}}],
+         "gate": {"id": "G0", "integration_test": {"file": "tests/gate.py", "cmd": "pytest -q tests/gate.py"}}}]}
+    code = tmp_path / "code"
+    (code / "pkg").mkdir(parents=True)
+    (code / "tests").mkdir()
+    return Project(root=tmp_path, code=code, cfg=Config(), ry={"project": "P", "package": "pkg"}, spec=spec)
+
+
+def test_freeze_review_flags_green_at_head(tmp_path, monkeypatch, capsys):
+    # The freeze-review gate EXECUTES red-before-green: a task test or gate that PASSES at HEAD
+    # (deliverable absent) is blind/false-green and must BLOCK queue; a test that fails is fine.
+    from types import SimpleNamespace
+    from raster import freeze_review
+    project = _clean_review_project(tmp_path)
+    (project.code / "tests" / "test_smoke.py").write_text("def test_blind():\n    assert 1 == 1\n")  # green at HEAD
+    (project.code / "tests" / "gate.py").write_text("def test_gate():\n    assert 1 == 1\n")          # green gate
+    monkeypatch.setattr(freeze_review, "load_project", lambda d: project)
+    # simulate running each frozen test against the real tree: both are GREEN at HEAD (the defect)
+    monkeypatch.setattr(freeze_review.execlib, "run_test", lambda proj, cmd, stub_pkg=None: (True, "1 passed"))
+    rc = freeze_review.run_freeze_review(SimpleNamespace(dir=str(tmp_path)))
+    out = capsys.readouterr().out
+    assert rc == 1                                                # green-at-HEAD blocks
+    assert "GREEN at HEAD" in out
+    assert "M0.T1" in out and "G0" in out                        # both the task test AND the gate flagged
+    assert "BLOCKING" in out
+
+
+def test_freeze_review_passes_when_red(tmp_path, monkeypatch, capsys):
+    # All frozen tests fail at HEAD (product absent) -> red-before-green holds -> mechanical checks pass.
+    from types import SimpleNamespace
+    from raster import freeze_review
+    project = _clean_review_project(tmp_path)
+    (project.code / "tests" / "test_smoke.py").write_text("import pkg\ndef test_x():\n    assert pkg\n")
+    (project.code / "tests" / "gate.py").write_text("import pkg\ndef test_g():\n    assert pkg\n")
+    monkeypatch.setattr(freeze_review, "load_project", lambda d: project)
+    monkeypatch.setattr(freeze_review.execlib, "run_test",
+                        lambda proj, cmd, stub_pkg=None: (False, "1 failed (ModuleNotFoundError)"))
+    rc = freeze_review.run_freeze_review(SimpleNamespace(dir=str(tmp_path)))
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "correctly RED at HEAD" in out
+    assert "mechanical checks clean" in out
+
+
 def test_freezelint_half_matrix_lookup(tmp_path):
     from raster.freezelint import lint_frozen_tests
     code = tmp_path / "code"
