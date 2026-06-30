@@ -139,6 +139,43 @@ def test_build_loop_moving_chain_recommends_requeue(tmp_path, monkeypatch, capsy
     assert "MOVING chain" in out and "RE-QUEUE" in out      # GG: more attempts, not a reconcile
 
 
+def test_failed_count_reads_pytest_summary():
+    # the trajectory the loop reads: a count when failures exist, 0 when none/unparseable (OO).
+    assert execlib.failed_count("17 failed, 17 passed in 4.2s") == 17
+    assert execlib.failed_count("E   NameError\nFAILED tests/test_x.py::test_y") == 0
+    assert execlib.failed_count("") == 0
+
+
+def test_build_loop_decaying_plateau_recommends_reconcile(tmp_path, monkeypatch, capsys):
+    # A CHANGING signature (so NOT the byte-identical plateau) whose FAILED COUNT falls then LEVELS
+    # OFF above zero (19->18->17->17) is a DECAYING PLATEAU: the worker fixed everything satisfiable
+    # and hit a floor of unsatisfiable oracle bugs (M9.T1). raster reads the asymptote, not the slope
+    # (OO/PP): it runs the budget but the verdict flips from "re-queue" to RECONCILE.
+    counts = {1: 19, 2: 18, 3: 17, 4: 17}
+    rc, sizes = _drive_build(
+        tmp_path, monkeypatch,
+        lambda i: f"E   assert {i} == 99\nFAILED tests/test_x.py::test_case_{i}\n"
+                  f"{counts[i]} failed, 5 passed in 4.0s")
+    assert rc == 1 and len(sizes) == 4                     # changing signature -> full budget, no abort
+    out = capsys.readouterr().out
+    assert "DECAYING PLATEAU" in out                       # the floor is named, not "progress"
+    assert "RECONCILE" in out and "RE-QUEUE" not in out     # reconcile the residual, do NOT add turns
+
+
+def test_build_loop_descending_chain_reads_asymptote(tmp_path, monkeypatch, capsys):
+    # The companion: a changing chain whose count is STILL falling (19->18->17->16) re-queues, but
+    # raster now flags the asymptote check first — confirm it heads to ZERO, not a nonzero floor.
+    counts = {1: 19, 2: 18, 3: 17, 4: 16}
+    rc, sizes = _drive_build(
+        tmp_path, monkeypatch,
+        lambda i: f"E   assert {i} == 99\nFAILED tests/test_x.py::test_case_{i}\n"
+                  f"{counts[i]} failed, 5 passed in 4.0s")
+    assert rc == 1 and len(sizes) == 4
+    out = capsys.readouterr().out
+    assert "still DESCENDING" in out and "READ THE ASYMPTOTE" in out
+    assert "RE-QUEUE" in out                               # still the re-queue lever, with the caveat
+
+
 # ---------------------------------------------------- undefined-name pass (FF) + reprompt
 def test_undefined_names_detects(tmp_path):
     project = make_project(tmp_path)
@@ -420,6 +457,41 @@ def test_declared_modules():
 def test_skipped_count():
     assert execlib.skipped_count("=== 50 passed, 3 skipped in 1.2s ===") == 3
     assert execlib.skipped_count("=== 50 passed in 1.2s ===") == 0
+
+
+def test_freezelint_phantom_attr_spy_sweeps_whole_tree(tmp_path):
+    from raster.freezelint import lint_phantom_attr_spies
+    code = tmp_path / "code"
+    (code / "pkg").mkdir(parents=True)
+    (code / "tests").mkdir()
+    # the built product increments `steps` (Mesa) and exposes `beat_index` — but never `_step_count`
+    (code / "pkg" / "model.py").write_text(
+        "class Model:\n    def __init__(self):\n        self.steps = 0\n        self.beat_index = 0\n")
+    # the SAME wrong belief sits in the unit test AND in the gate (a separate file) — RR/SS
+    (code / "tests" / "test_player.py").write_text(
+        "from pkg.model import Model\n"
+        "def test_step():\n    m = Model()\n"
+        "    assert getattr(m, '_step_count', 0) == 1\n"          # phantom: product has no _step_count
+        "    assert getattr(m, 'beat_index', 0) == 0\n")          # real attr -> NOT flagged
+    (code / "tests" / "gate_gui.py").write_text(
+        "from pkg.model import Model\n"
+        "def test_gate():\n    m = Model()\n"
+        "    assert getattr(m, '_step_count', 0) == 2\n")          # the gate clone the unit green misses
+    v = lint_phantom_attr_spies(code, "pkg")
+    joined = "\n".join(v)
+    assert sum("_step_count" in x for x in v) == 2                 # flagged in BOTH files (the sweep)
+    assert "gate_gui.py" in joined                                # the gate clone is caught
+    assert "beat_index" not in joined                             # a real attribute is never flagged
+
+
+def test_freezelint_phantom_attr_spy_noop_until_built(tmp_path):
+    from raster.freezelint import lint_phantom_attr_spies
+    code = tmp_path / "code"
+    (code / "pkg").mkdir(parents=True)                            # package dir exists but EMPTY (no source)
+    (code / "tests").mkdir()
+    (code / "tests" / "test_x.py").write_text(
+        "def test_y(obj):\n    assert getattr(obj, '_step_count', 0) == 1\n")
+    assert lint_phantom_attr_spies(code, "pkg") == []             # no product tokens yet -> no-op mid-freeze
 
 
 def test_freezelint_half_matrix_lookup(tmp_path):

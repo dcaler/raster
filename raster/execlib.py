@@ -308,6 +308,16 @@ def skipped_count(output: str) -> int:
     return int(m.group(1)) if m else 0
 
 
+def failed_count(output: str) -> int:
+    """Number of FAILED tests in a pytest run (0 if none / no recognizable summary). The repair
+    loop reads the TRAJECTORY of this count across attempts: a count that falls but levels off
+    ABOVE ZERO is a DECAYING PLATEAU — the worker fixed everything satisfiable and hit a floor of
+    unsatisfiable oracle bugs, so more turns can't reach green (failure-chain-floor guidance, OO).
+    Read the asymptote, not the slope: 'did the error move?' is necessary but not sufficient."""
+    m = re.search(r"\b(\d+)\s+failed\b", output)
+    return int(m.group(1)) if m else 0
+
+
 def failure_signature(output: str) -> str:
     """The STABLE assertion/error lines of a failing pytest run — pytest's `E   ...` detail and
     `FAILED ...` short-summary lines, which carry the concrete value (`assert 0.0833 == 0.8`) but
@@ -457,6 +467,25 @@ _AUTHOR_INSTRUCTIONS = (
     "3-line SELF-CHECK in the fixture that asserts the helper actually has the assumed properties "
     "BEFORE any value relies on them (a distance/metric adapter: assert m(x,x)==0 and m(a,b)==m(b,a)). "
     "It fails at authoring time instead of after the worker burns its budget on an unsatisfiable test.\n"
+    "A STATEFUL EXPECTATION NEEDS ONE LOOPING TEST, NOT N FRESH-FIXTURE PARAMETRIZED CASES. A "
+    "function-scoped fixture hands EACH parametrized case a brand-new object, so a parametrize over "
+    "an accumulating index that calls the producer ONCE per case and asserts `state == k` for "
+    "k=0,1,2,…,N is UNSATISFIABLE: every fresh case is back at state 0/1, so cases 1..N assert "
+    "`0 == k` and can never pass (M9.T1: 16 cases each got a fresh player, called generate_tick() "
+    "once, then asserted beat_index == its case number — 15 of them were `0 == 14`, `0 == 15`, …). "
+    "When the expectation is about ACCUMULATED state across steps, write ONE test that builds the "
+    "object once and LOOPS — drive N steps and assert the running value at each — not N independent "
+    "fresh-fixture cases. Reserve parametrize for genuinely INDEPENDENT cases (each self-contained "
+    "from a fresh fixture); never use it to fake a sequence over shared evolving state.\n"
+    "SPY ON THE GENUINE COUNTER THE PRODUCTION OBJECT ACTUALLY DEFINES, NEVER A PHANTOM ATTRIBUTE. "
+    "`getattr(obj, '_step_count', 0)` to detect that a step happened is a TRAP when the object "
+    "increments a DIFFERENTLY-named field (a Mesa model auto-wraps step() into `self.steps`, not "
+    "`_step_count`): the probe reads its DEFAULT before and after, so `before == after` always and "
+    "`after == before + 1` can never hold (and the mid-window twin passes VACUOUSLY, reading the "
+    "same missing attribute). Before spying on a counter/flag, confirm the production class REALLY "
+    "exposes that exact attribute name; assert against the real one (`model.steps`). A getattr with "
+    "a default silently swallows the schism into a forever-default — name the attribute exactly, or "
+    "don't use a default and let a wrong name AttributeError loudly.\n"
     "DON'T USE A HALF-MATRIX TABLE AS A METRIC. A symmetric relation stored de-duplicated (each "
     "unordered pair once, no diagonal) is a TABLE, not a FUNCTION: `GOLDEN.get((a,b), default)` keyed "
     "by free (a,b) misses the other order and the (a,a) diagonal, yielding an asymmetric, "

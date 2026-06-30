@@ -87,6 +87,8 @@ def run_build(args) -> int:
 
     prev_sig = None     # last attempt's failure signature, for the same-failure plateau abort
     chain_moved = False # did the failure signature CHANGE across attempts? (a moving chain, not a plateau)
+    prev_count = None   # last attempt's FAILED count, to read the trajectory's slope (not just red/green)
+    fail_counts = []    # the failed-count series across attempts — a decaying plateau levels off > 0
     feedback = None     # the SINGLE most-useful prior-failure summary — re-composed, never grown
     for attempt in range(1, max_attempts + 1):
         idx = rung_index(start, attempt, ESCALATE_AFTER, len(ladder))
@@ -181,6 +183,8 @@ def run_build(args) -> int:
             # expected value (an oracle bug), not a coding failure the ladder can repair. Abort to a
             # HUMAN ORACLE CHECK now, before the expensive tier burns an attempt on a broken task.
             sig = execlib.failure_signature(output)
+            failed = execlib.failed_count(output)
+            fail_counts.append(failed)
             if sig and sig == prev_sig:
                 span = "across an escalation" if idx > start else "on two consecutive attempts"
                 log(f"FAILED build={args.task}: STABLE failing value {span} — the byte-identical "
@@ -192,14 +196,25 @@ def run_build(args) -> int:
                 return 1
             if sig and prev_sig and sig != prev_sig:
                 # The MIRROR image of the plateau (EE): the failure CHANGED, so the worker fixed the
-                # last error and surfaced the next — genuine progress against a SOUND test. The right
-                # lever is escalation / more turns, NOT a human oracle reconcile (that wrongly blames
-                # a correct test). Read the trend of the error STRING, not just red/green.
+                # last error and surfaced the next. But "did the error move?" is necessary, NOT
+                # sufficient (failure-chain-floor guidance OO): read what it moves TOWARD. A changed
+                # signature whose FAILED COUNT also dropped is genuine progress toward zero — escalate
+                # / give more turns. A changed signature whose count did NOT drop (stuck or rising,
+                # still > 0) is a DECAYING/oscillating PLATEAU: the worker is shuffling which residual
+                # tests fail without converging, the fingerprint of an unsatisfiable oracle-bug floor.
                 chain_moved = True
-                log(f"attempt {attempt}: failure signature CHANGED from the prior attempt — the "
-                    f"worker is making real PROGRESS against a sound test (the mirror image of a "
-                    f"plateau). Escalating / giving more turns is correct here, not an oracle check.")
+                if prev_count is not None and failed > 0 and failed >= prev_count:
+                    log(f"attempt {attempt}: failure signature CHANGED but the FAILED COUNT did NOT "
+                        f"drop ({prev_count} -> {failed}) — the chain is moving WITHOUT converging "
+                        f"(a DECAYING PLATEAU). Read the asymptote, not the slope: this is likely a "
+                        f"floor of UNSATISFIABLE residual tests (oracle bugs), not progress. If it "
+                        f"holds, RECONCILE the residual — don't keep spending the strong tier on it.")
+                else:
+                    log(f"attempt {attempt}: failure signature CHANGED and the FAILED COUNT fell "
+                        f"({prev_count} -> {failed}) — the worker is making real PROGRESS toward zero "
+                        f"against a sound test. Escalating / giving more turns is correct here.")
             prev_sig = sig
+            prev_count = failed
 
         # Logic failure: keep ONLY the latest failing output + a targeted fix as next attempt's
         # feedback (marginal value, latest only — the chain of prior near-misses is noise). The
@@ -221,20 +236,40 @@ def run_build(args) -> int:
                 fix = execlib.reprompt_for_undefined_names(undef) + "\n\n" + fix
         feedback = f"Your previous attempt failed `{unit_cmd}`:\n\n{output[-MAX_OUTPUT_CHARS:]}\n\n" + fix
 
-    if chain_moved:
-        # A MOVING chain that exhausted the budget (GG): unlike a plateau (already aborted above),
-        # the worker WAS progressing against a sound test and simply ran out of turns — often because
-        # runtime errors mask each other (one revealed per ~cycle), so MAX_ATTEMPTS as a flat constant
-        # under-budgets a deep error stack. More attempts is the right call here (it is pure waste on a
-        # plateau). But first rule out a STRUCTURAL miss hiding behind the shallow chain (HH) — no
-        # number of import-fixes converges on the wrong output shape.
-        log(f"FAILED build={args.task} after {max_attempts} attempts — but the failure CHANGED across "
-            f"attempts (a MOVING chain, NOT a plateau): the worker was progressing against a sound test "
-            f"and ran out of turns. RE-QUEUE with more RASTER_MAX_ATTEMPTS or a higher floor tier — this "
-            f"is not plateau waste. FIRST hand-read the deliverable against the contract: a structural / "
-            f"comprehension miss (wrong output SHAPE — e.g. one file per value vs one summary row per "
-            f"value) can hide behind a chain of shallow errors and never be reached before the budget runs out.")
+    traj = "->".join(str(c) for c in fail_counts) if fail_counts else "n/a"
+    leveled_off = len(fail_counts) >= 2 and fail_counts[-1] > 0 and fail_counts[-1] >= fail_counts[-2]
+    if chain_moved and leveled_off:
+        # DECAYING PLATEAU (failure-chain-floor guidance OO/PP): the chain MOVED but its failed count
+        # leveled off ABOVE zero (failed[-1] >= failed[-2] > 0). The worker fixed everything that was
+        # satisfiable and hit a floor of residual tests no implementation can pass — a subtler shape
+        # of the same oracle-bug plateau the byte-identical check aborts on, masked early by healthy-
+        # looking progress. More turns CANNOT cross it; the lever is reconcile, not budget.
+        log(f"FAILED build={args.task} after {max_attempts} attempts — the failure count DECAYED then "
+            f"LEVELED OFF above zero (failed count {traj}): a DECAYING PLATEAU. The worker fixed every "
+            f"SATISFIABLE failure and hit a floor of residual tests no impl can pass — read the "
+            f"ASYMPTOTE, not the slope. Do NOT re-queue with more turns (waste on a floor). RECONCILE: "
+            f"test each residual failure for satisfiability (can ANY impl pass it given the rest of the "
+            f"frozen suite?); a 'no' is an oracle bug — a HUMAN freeze call to fix the frozen test "
+            f"(common floors: a fresh-fixture-per-case parametrize expecting accumulated state, a "
+            f"hand-authored golden no seed produces, a spy on an attribute the product never defines).")
+    elif chain_moved:
+        # A MOVING chain still DESCENDING toward zero that exhausted the budget (GG): the worker WAS
+        # progressing against a sound test and ran out of turns — often because runtime errors mask
+        # each other (one revealed per ~cycle), so a flat MAX_ATTEMPTS under-budgets a deep error
+        # stack. More attempts can be the right call. But FIRST read the asymptote (OO): a chain that
+        # is heading toward a NONZERO floor (still ticking down by ones, 19->18->17) looks identical
+        # to one heading to zero until it flattens — confirm the residual is genuinely satisfiable
+        # before spending more of the strong tier on it. And rule out a STRUCTURAL miss (HH).
+        log(f"FAILED build={args.task} after {max_attempts} attempts — the failure CHANGED and was "
+            f"still DESCENDING (failed count {traj}): a MOVING chain, not a flat plateau. The worker "
+            f"was progressing and ran out of turns. Before re-queuing, READ THE ASYMPTOTE: confirm it "
+            f"is heading to ZERO, not converging on a nonzero floor — test each remaining failure for "
+            f"satisfiability (a chain that ticks down by ones toward a residual of UNSATISFIABLE oracle "
+            f"bugs looks like progress until it flattens). If satisfiable, RE-QUEUE with more "
+            f"RASTER_MAX_ATTEMPTS or a higher floor tier; if not, RECONCILE the residual instead. "
+            f"Either way hand-read the deliverable for a structural/comprehension miss (wrong output "
+            f"SHAPE) that can hide behind a chain of shallow errors and never be reached in budget.")
     else:
-        log(f"FAILED build={args.task} after {max_attempts} attempts. "
+        log(f"FAILED build={args.task} after {max_attempts} attempts (failed count {traj}). "
             f"Inspect {project.code} or re-run with more RASTER_MAX_ATTEMPTS.")
     return 1

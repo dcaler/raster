@@ -81,6 +81,15 @@
 #     attempts (not reconcile). (b) A STRUCTURAL/comprehension miss (wrong output SHAPE) can hide behind
 #     the shallow chain and never be reached — so a sweep/exporter gate must assert the NUMBER and SHAPE
 #     of artifacts (exactly one summary file, one row per swept value), not only their values.
+#   * "DID THE ERROR MOVE?" IS NECESSARY BUT NOT SUFFICIENT — READ THE ASYMPTOTE, NOT THE SLOPE. A failure
+#     COUNT that falls but levels off ABOVE ZERO is a DECAYING PLATEAU, not progress: the worker fixed
+#     everything satisfiable and hit a floor of residual tests no impl can pass (M9.T1: 19->18->17 failed,
+#     then stuck — the 17 were three oracle bugs). raster tracks the failed-count trajectory: when a moving
+#     chain LEVELS OFF above zero it switches from "re-queue more turns" to RECONCILE; when it's still
+#     descending it re-queues but flags you to confirm it's heading to ZERO first (a chain ticking down by
+#     ones toward a nonzero floor looks like progress until it flattens). When a plateau is suspected — flat
+#     OR decaying — test each RESIDUAL failure for satisfiability (can ANY impl pass it given the rest of the
+#     frozen suite?); a 'no' is an oracle bug -> stop and reconcile, don't burn the strong tier on a floor.
 #   * RED-BEFORE-GREEN — A DELIVERABLE'S TEST MUST FAIL AT HEAD. A build task's frozen test that is
 #     already GREEN on the current tree (before anything is written) isn't testing its deliverable; it's
 #     testing something that already exists. The classic miss: a data/config/asset deliverable
@@ -168,7 +177,24 @@
 #     (9) RED-BEFORE-GREEN: for each build task, confirm its frozen test FAILS on the current tree with the
 #     deliverable absent and references that deliverable by path (loads a data/config/asset through the real
 #     loader, not an inline re-encoding). A test green at HEAD is blind to its deliverable — a false green,
-#     and since the test is the worker's gradient, a runaway-output cause (raster lint flags the non-.py case).
+#     and since the test is the worker's gradient, a runaway-output cause (raster lint flags the non-.py case);
+#     (10) DECAYING PLATEAU = STILL A PLATEAU: a falling-but-leveling-off failure count (19->18->17, then stuck)
+#     is a floor of UNSATISFIABLE oracle bugs masquerading as progress. When a chain plateaus (flat OR decaying)
+#     test each residual failure for satisfiability and reconcile the unpassable ones. Audit the frozen suite for
+#     the three floor archetypes: a PARAMETRIZE giving a fresh function-scoped fixture per case while asserting
+#     ACCUMULATED state (k=0,1,2,… — use one LOOPING test instead); a hand-authored GOLDEN no seed/real producer
+#     generates (same summary stat, different actual values — derive expected from the real producer); a SPY on an
+#     attribute the production object never defines (getattr(obj,'_step_count',0) vs Mesa's self.steps — always-
+#     fail or vacuously-pass). Each is independently unpassable; together they look like "the worker is almost there.";
+#     (11) SWEEP EVERY RECONCILE FOR SIBLINGS: a frozen-test oracle bug is evidence about its AUTHOR, not just the one
+#     test — Phase-0 freezes a whole module's tests in one pass by one model, so a wrong belief ("the model exposes
+#     _step_count", "vacancies sit at these indices", "units are fractions") is replicated across every sibling test that
+#     touches the concept. The moment you confirm one oracle bug, grep the WHOLE tests/ tree (gate_*.py INCLUDED — the
+#     gate is a separate file the per-task green never runs, so it's the ambush) for the same fingerprint and reconcile
+#     every hit in this pass. Fixing the unit test clears the symptom; clear the BELIEF everywhere the suite relies on it.
+#     raster lint's phantom-attribute-spy check sweeps all of tests/ at once and catches the literal-token case (e.g. a
+#     getattr(obj,'_step_count',0) recurring in the gate) for free; the structural shapes (fresh-fixture-per-case, a
+#     hand-authored golden, a magic dimension) need your eye — but you now know the shape to grep for.
 
 orchestration:
   task:    {advance_on: unit_test_pass, on_fail: block_next_task}

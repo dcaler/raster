@@ -167,6 +167,30 @@ in `tasks.yaml`. Rules that make a spec **valid** (get these right or the build 
   sweep/exporter gate must assert the **number and shape** of artifacts (exactly one summary file, one
   row per swept value), not only their values, and the freeze→impl checkpoint should hand-read the
   deliverable against the contract's *intent*, not trust "one more import-fix and it's green."
+- **"Did the error move?" is necessary but not sufficient — read the *asymptote*, not the slope.** A
+  failure *count* that falls but levels off **above zero** is a **decaying plateau**, not progress: the
+  worker fixed everything satisfiable and hit a floor of residual tests no implementation can pass
+  (M9.T1: 19→18→17 failed, then stuck — the 17 were three oracle bugs). raster tracks the failed-count
+  trajectory and, when a moving chain **levels off above zero**, recommends a **reconcile** instead of
+  more turns; while it's still descending it re-queues but flags you to confirm it's heading to *zero*
+  (a chain ticking down by ones toward a nonzero floor is indistinguishable from real progress until it
+  flattens). When a plateau is suspected — flat *or* decaying — test each **residual** failure for
+  satisfiability: *can any impl pass it, given the rest of the frozen suite?* A "no" is an oracle bug →
+  stop and reconcile (a human freeze call), don't spend the strong tier on an unpassable floor. The
+  three floor archetypes to audit for: a parametrize handing a **fresh fixture per case** while
+  asserting **accumulated** state (use one *looping* test); a hand-authored **golden** no seed/real
+  producer generates (derive expected from the real producer); a **spy on a non-existent attribute**
+  (`getattr(obj, '_step_count', 0)` vs the framework's real `self.steps`).
+- **A found oracle bug is evidence about its *author* — sweep the frozen suite for siblings.** Phase-0
+  freezes a whole module's tests in one pass by one model, so a frozen-test bug is rarely a typo — it's a
+  **wrong belief** ("the model exposes `_step_count`", "vacancies sit at these indices") the author
+  applied to *every* sibling test that touches the concept. Fixing the one test that surfaced it leaves
+  clones behind — most dangerously in the module **gate** (`gate_*.py`), a separate file the per-task
+  green never runs, where it ambushes a downstream task hours later. So on **every** reconcile, grep the
+  whole `tests/` tree (gates included) for the same fingerprint and fix all instances pre-emptively —
+  one grep versus a fresh multi-hour plateau on a later gate. `raster lint` sweeps all of `tests/` for the
+  phantom-attribute-spy fingerprint (the literal-token case) automatically; the structural shapes need an
+  eye. Clear the *belief* across the suite, not just the symptom in the one test.
 - **Red-before-green — a build task's frozen test must FAIL at HEAD.** A test already green on the
   current tree (before anything is built) isn't testing its deliverable. The classic miss is a
   data/config/asset deliverable (`configs/demo.yaml`) whose test checks an inline kwargs dict + golden

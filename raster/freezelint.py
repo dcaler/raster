@@ -23,6 +23,12 @@ Checks (each maps to an observed defect class):
     references its own data/config/asset deliverable (M8.T1's test checked an inline kwargs dict but
     never loaded configs/demo.yaml) is green at HEAD with the artifact absent: a false green AND,
     since the frozen test is the worker's gradient, a runaway-output cause. Red-before-green.
+  * phantom-attribute spy (lint_phantom_attr_spies) — a frozen test reading product state via
+    getattr(obj, 'NAME', default) where NAME exists nowhere in the built product reads the default
+    forever: an always-fail/vacuous probe no impl can satisfy (M9.T1 spied `_step_count`; the model
+    increments `steps`). Sweeps the WHOLE tests/ tree (gates included), so it catches the same wrong
+    belief recurring across every sibling the freeze pass authored — the gate clone the per-task green
+    never runs. Whole-system; fires only on a name absent from ALL product source; no-op until built.
   * copied source-of-truth constant (lint_copied_constants) — a consumer holding a PRIVATE copy of
     a canonical constant (a literal dict/list 'based on <module>', or the same constant name
     defined as a literal in 2+ product modules) makes its own contract gate tautological: it
@@ -788,13 +794,83 @@ def lint_deliverable_blind_tests(code, package: str, spec: dict) -> list:
     return violations
 
 
+def _product_name_tokens(code, package: str) -> set:
+    """Every identifier-shaped token appearing anywhere in the BUILT product source (names,
+    attributes, string contents — a plain word-set over the text). Used to decide whether a
+    frozen test spies on an attribute the product NEVER mentions. Empty until the package is
+    built, so checks keyed on it are a no-op mid-freeze."""
+    pkg_root = code / package if package else code
+    if not pkg_root.is_dir():
+        return set()
+    tokens = set()
+    for f in pkg_root.rglob("*.py"):
+        try:
+            tokens.update(re.findall(r"[A-Za-z_]\w*", f.read_text()))
+        except OSError:
+            continue
+    return tokens
+
+
+def _getattr_string_default(node):
+    """For a 3-arg `getattr(obj, 'LITERAL', default)` return its string LITERAL; else None. The
+    third arg (a default) is the smell: a no-default getattr AttributeErrors loudly on a wrong
+    name, but a defaulted one silently returns the default forever — a spy that can never observe
+    the real attribute (failure-chain-floor archetype c / oracle-bug-propagation)."""
+    if (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+            and node.func.id == "getattr" and len(node.args) == 3):
+        return _const_str(node.args[1])
+    return None
+
+
+def lint_phantom_attr_spies(code, package: str) -> list:
+    """A frozen test that spies on a production attribute via `getattr(obj, 'NAME', default)` where
+    NAME appears NOWHERE in the built product is reading the default forever — an always-fail (or
+    vacuously-pass) probe no implementation can satisfy (SchellingChords M9.T1: tests spied
+    `getattr(model, '_step_count', 0)` but the Mesa model increments `self.steps`; `_step_count`
+    exists nowhere in the product). Two guidance lessons converge here:
+      * failure-chain-floor archetype (c): a spy on a non-existent attribute is one of the three
+        unsatisfiable-floor shapes that make a repair chain decay to a nonzero asymptote.
+      * oracle-bug-propagation (RR/SS): a frozen-test bug reflects the AUTHOR's wrong belief and
+        recurs across every sibling test the same Phase-0 pass froze — most dangerously the module
+        GATE, a separate file the per-task green never runs (M9.T1's spy sat verbatim in G9's
+        gate_gui.py). This check sweeps the WHOLE tests/ tree (gates included) in one pass, so it
+        catches the gate clone before its downstream task ever runs it.
+    Whole-system, conservative: it fires only when the literal attribute name is absent from the
+    ENTIRE product source (so an attr set/read/defaulted anywhere in the product is never flagged),
+    and self-limits to a built package (no tokens -> no-op mid-freeze)."""
+    tokens = _product_name_tokens(code, package)
+    if not tokens:                                          # package not built yet -> nothing to check
+        return []
+    tests = code / "tests"
+    files = sorted(tests.rglob("*.py")) if tests.is_dir() else []
+    violations = []
+    for f, tree in _parse(files).items():
+        if isinstance(tree, SyntaxError):
+            continue
+        for node in ast.walk(tree):
+            name = _getattr_string_default(node)
+            if name is None or (name.startswith("__") and name.endswith("__")):
+                continue
+            if name not in tokens:
+                violations.append(
+                    f"{f.name}:{node.lineno}: getattr(..., {name!r}, default) spies on an attribute "
+                    f"that appears NOWHERE in the product ({package}) — it reads the default forever, "
+                    f"so an assertion that it changed/incremented can never pass (the product likely "
+                    f"uses a different name). Spy on the GENUINE attribute, or drop the default so a "
+                    f"wrong name fails loudly. NOTE (oracle-bug-propagation): a frozen-test bug recurs "
+                    f"across every sibling the same freeze pass authored — grep the whole tests/ tree "
+                    f"(gates included) for {name!r} and fix all instances in this reconcile.")
+    return violations
+
+
 def run_lint(args) -> int:
     project = load_project(args.dir)
     violations = (lint_spec(project.spec)
                   + lint_frozen_tests(project.code, project.package, project.spec)
                   + lint_dead_modules(project.code, project.package, project.spec)
                   + lint_copied_constants(project.code, project.package)
-                  + lint_deliverable_blind_tests(project.code, project.package, project.spec))
+                  + lint_deliverable_blind_tests(project.code, project.package, project.spec)
+                  + lint_phantom_attr_spies(project.code, project.package))
     if not violations:
         print("[raster lint] frozen-test cross-reference: clean")
         return 0
