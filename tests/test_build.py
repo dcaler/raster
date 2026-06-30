@@ -980,11 +980,31 @@ def test_resolve_rung_think_precedence():
 def test_linearize_chain(tmp_path):
     project = make_project(tmp_path)
     chain = linearize(project, exec_cmd="raster")
-    assert [c["id"] for c in chain] == ["P0.M0", "M0.T1", "G0"]
+    # the freeze-review gate is inserted on the P0->impl boundary (after authoring, before M0)
+    assert [c["id"] for c in chain] == ["P0.M0", "freeze-review", "M0.T1", "G0"]
     assert chain[0]["command"] == "raster build P0.M0" and chain[0]["resource"] == 2
-    assert chain[2]["command"] == "raster test G0" and chain[2]["resource"] == 3  # gate -> cpu
+    fr = chain[1]
+    assert fr["command"] == "raster freeze-review" and fr["resource"] == 3   # gate -> cpu, fails closed
+    assert chain[3]["command"] == "raster test G0" and chain[3]["resource"] == 3  # gate -> cpu
     # titles use the `raster:` prefix (not the project name) — the trundlr project groups them
-    assert [c["title"] for c in chain] == ["raster: P0.M0", "raster: M0.T1", "raster: G0"]
+    assert [c["title"] for c in chain] == ["raster: P0.M0", "raster: freeze-review",
+                                           "raster: M0.T1", "raster: G0"]
+
+
+def test_linearize_budget_sets_duration(tmp_path):
+    # a per-task/gate `budget:` (seconds) reserves at least budget/3600 hours in the trundlr chain,
+    # so a legitimately long GA gate gets a scheduling window matching its timeout.
+    project = make_project(tmp_path)
+    project.spec = {"meta": SPEC["meta"], "execution": SPEC["execution"], "modules": [
+        {"id": "M7", "name": "ga", "tasks": [{"id": "M7.T1", "title": "GA", "worker": "strong",
+                                              "budget": 7200}],
+         "gate": {"id": "G7", "spec": "undo", "budget": 5400,
+                  "integration_test": {"file": "tests/gate_undo.py", "cmd": "pytest -q"}}}]}
+    chain = {c["id"]: c for c in linearize(project, exec_cmd="raster")}
+    assert chain["M7.T1"]["duration"] == 2.0          # 7200s = 2h overrides the 1.75h think-on prior
+    assert chain["G7"]["duration"] == 1.5             # 5400s = 1.5h overrides the 0.1h gate prior
+    # no P0 authoring module here -> no freeze-review node inserted
+    assert "freeze-review" not in chain
 
 
 def test_linearize_inserts_review_checkpoints(tmp_path):

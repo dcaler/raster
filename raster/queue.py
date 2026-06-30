@@ -102,18 +102,52 @@ def _checkpoint_item(cid: str, prompt: str, reviewers: list) -> dict:
     }
 
 
+def _budgeted(duration: float, item: dict) -> float:
+    """Reserve at least the task/gate's `budget:` (seconds) as the trundlr duration (hours),
+    so a legitimately long gate (a GA/optimizer) gets a scheduling window matching its timeout."""
+    b = item.get("budget")
+    return max(duration, b / 3600.0) if b else duration
+
+
+def _freeze_review_item(exec_cmd: str, cpu) -> dict:
+    """The pre-queue gate node: runs once after all P0 authoring, before any implementation.
+    `raster freeze-review` lints + EXECUTES red-before-green over the frozen suite and fails
+    closed (non-zero => trundlr breaks the downstream chain), so the GPU build budget is spent
+    only on a freeze that already cleared the cheap mechanical checks (freeze_review_gate UU/VV)."""
+    return {
+        "id": "freeze-review",
+        "title": "raster: freeze-review",
+        "description": "Pre-queue gate — lint + executed red-before-green over the frozen suite "
+                       "(fails closed before any GPU build).",
+        "command": f"{exec_cmd} freeze-review",
+        "resource": cpu,
+        "resources": [cpu],
+        "kind": "gate",
+        "duration": 0.25,
+    }
+
+
 def linearize(project, exec_cmd: str) -> list:
     res = project.execution.get("resources", {}) or {}
     gpu = res.get("gpu", project.cfg.gpu_resource)
     cpu = res.get("cpu", project.cfg.cpu_resource)
     reviewers = [r for r in (project.cfg.human_resource, project.cfg.claude_resource) if r]
     chain = []
+    saw_authoring = False
+    review_inserted = False
     for m in project.spec.get("modules", []) or []:
+        # The freeze-review gate sits on the freeze->impl boundary: after every P0 authoring task,
+        # before the first implementation module runs (and before that module's checkpoint).
+        is_impl_module = not str(m.get("id", "")).startswith("P0")
+        if saw_authoring and is_impl_module and not review_inserted:
+            chain.append(_freeze_review_item(exec_cmd, cpu))
+            review_inserted = True
         ck = m.get("checkpoint")
         if ck:                           # a review BEFORE this module's tasks run
             chain.append(_checkpoint_item(m["id"], _checkpoint_text(ck), reviewers))
         for t in m.get("tasks", []) or []:
             authoring = str(t.get("id", "")).startswith("P0")
+            saw_authoring = saw_authoring or authoring
             think_start, escalates = _think_budget(project, t, authoring)
             chain.append({
                 "id": t["id"],
@@ -123,8 +157,8 @@ def linearize(project, exec_cmd: str) -> list:
                 "resource": gpu,
                 "resources": [gpu],
                 "kind": "task",
-                "duration": estimate_hours("task", t.get("worker", "strong"),
-                                           think=think_start, escalates=escalates),
+                "duration": _budgeted(estimate_hours("task", t.get("worker", "strong"),
+                                                     think=think_start, escalates=escalates), t),
             })
         g = m.get("gate")
         if g:
@@ -136,7 +170,7 @@ def linearize(project, exec_cmd: str) -> list:
                 "resource": cpu,
                 "resources": [cpu],
                 "kind": "gate",
-                "duration": estimate_hours("gate", ""),
+                "duration": _budgeted(estimate_hours("gate", ""), g),
             })
     fck = project.spec.get("final_checkpoint")
     if fck:                              # a whole-system sign-off after the last module
