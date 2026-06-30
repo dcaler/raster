@@ -108,7 +108,14 @@ session seeded with the planning playbook (or `--no-launch` to drive it by hand)
 
 Lessons distilled from real build failures — written for a future Claude working on
 a raster/doer build, not for setup. **Match your symptom, then open the file.** Each
-is self-contained and cross-linked; additions are lettered cumulatively (I…DD).
+is self-contained and cross-linked; additions are lettered cumulatively (I…XX).
+
+> **Start here:** [`freeze_review_gate_guidance.md`](./freeze_review_gate_guidance.md) — the meta file.
+> raster concentrates correctness risk in one LLM-authored step (Phase-0 freeze); across a whole project
+> the *costly* failures were frozen-layer defects, not implementation defects. This corpus is really a
+> **freeze-review checklist** — run its four properties (red-before-green per deliverable, per-assertion
+> satisfiability, producer-correspondence, sibling/gate assumption sweep) over the frozen tests *before*
+> `queue`, and fall back to the symptom index below during a build.
 
 **False greens — a test passes but proves nothing**
 - [`false_green_guidance.md`](./false_green_guidance.md) — a green test you distrust: skip-on-`ImportError`, a re-stubbed algorithm passing by tolerance luck, an unsatisfiable framework built to never fail.

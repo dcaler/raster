@@ -305,6 +305,52 @@ Both layers are **authored once and amortised** across every run/re-run — trig
 high-value edges, don't gate every task. (Checkpoints need `human_resource` and `claude_resource`
 set in `~/.config/raster/config.toml`, else `raster queue` warns and queues them reviewer-less.)
 
+## Step 3c — Freeze-review: run `raster freeze-review` before `queue`
+
+raster concentrates correctness risk in ONE LLM-authored step — the Phase-0 freeze — then spends
+the expensive downstream compute (worker → strong → +think, often hours/task) *assuming the frozen
+layer is sound*. Across a whole project the **costly** failures are almost all frozen-layer defects,
+not implementation defects: a minute of freeze review outweighs an hour of doer retries. This whole
+guidance corpus is, in effect, a **freeze-review checklist** — run it BEFORE queuing, not after a
+build fails. `raster freeze-review` runs the mechanical half as a gate (it fails closed):
+
+1. **Static cross-reference** — the full `raster lint` suite.
+2. **Red-before-green, per deliverable** — it *executes* each implement task's frozen test against
+   the real tree at HEAD and blocks any that pass (green at HEAD ⇒ the test isn't testing its
+   deliverable: a false green and a runaway-output cause). A zero-cost early exerciser that pulls
+   discovery back to the freeze.
+3. **Gate red-before-green** — the same for every module gate. Gates are the structural blind spot:
+   authored with the unit tests but exercised only late, so they silently carry the same bugs (a
+   green unit task says nothing about its gate). Exercise them at freeze.
+
+Then complete, by hand (the command prints them — no linter can promote these):
+
+4. **Per-assertion satisfiability** — can ANY faithful impl pass each assertion, given the rest of
+   the suite? Watch for the floor archetypes: a fresh fixture per `parametrize` case asserting
+   accumulated state; a hand-authored golden no seed produces; a spy on a non-existent attribute.
+5. **Producer-correspondence** — is each expected value *derived from* the real producer, or
+   hand-encoded in parallel?
+6. **Assumption sweep** — when you reconcile any oracle bug, grep the whole `tests/` tree (gates
+   included) for the same fingerprint; one wrong belief recurs across siblings.
+
+**Calibrated (empirical) goldens — for targets only the producer can tell you.** A formula-derived
+or axiomatic golden you can hand-author. But a **stochastic/producer-frontier** target — "the GA
+drives Gini below X", "emergent inequality reaches level Y" — is *not knowable at authoring time*;
+pinning an absolute threshold before measuring the frontier is the M9.T1 trap (the target may be
+unsatisfiable for any correct impl, or trivially green). Two fixes, in order of preference:
+- **Pin a differential, not an absolute.** A seed-averaged margin against a *baseline computed in
+  the same run* (emergent − baseline ≥ margin; intervened ≤ un-intervened − margin) holds regardless
+  of the absolute level the producer happens to reach. Reserve absolute floors for soft sanity bounds.
+- **Calibrate, then freeze the measurement.** Where an absolute number is unavoidable, run a cheap
+  reference/pilot to *measure* the frontier and derive the constant from it (freeze the measured
+  value + tolerance, with a conftest self-check against the pilot) — "golden by construction", the
+  empirical analog of deriving a golden from a formula. (See postIneq's `calibration/` for a worked
+  example: a faithful Sugarscape-3 reference measured the emergent/undo frontier and the gate
+  thresholds were derived from it instead of guessed.)
+
+For a legitimately long gate (a GA/optimizer over seeded runs), set a per-task `budget:` (seconds)
+in tasks.yaml so the timeout doesn't kill a slow-but-progressing run.
+
 ## Step 4 — Write the one-line build description
 
 Now that the design is settled, distil it into **one concrete sentence** and write it to the
@@ -330,9 +376,11 @@ prompt's first line.
 - `code/raster.yaml` `description:` holds the generated one-line build description (no longer the
   `(to be generated during raster plan)` placeholder).
 - `PROGRESS.md` lists every gate and task.
-- the user has signed off. Then the project is ready for **`raster queue`** — which submits the
-  build chain to trundlr (running `raster build` per task and `raster test` per gate). Tell the
-  user the next step is `raster queue` (preview it first with `raster queue --dry-run`), not
+- the user has signed off. Then, **before** queuing, Phase-0 is authored and run through
+  **`raster freeze-review`** (Step 3c) — its mechanical checks clean and its reasoning checklist
+  walked. Only then is the project ready for **`raster queue`** — which submits the build chain to
+  trundlr (running `raster build` per task and `raster test` per gate). Tell the user the next step
+  is `raster freeze-review` then `raster queue` (preview it with `raster queue --dry-run`), not
   `raster build` directly.
 
 ---

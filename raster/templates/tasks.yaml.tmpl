@@ -106,6 +106,16 @@
 #     loud warning when a gate/test PASSES with skipped tests — a nonzero skip count is a signal,
 #     not noise. The first task to CONSUME an upstream module is its real integration test; expect
 #     upstream false-greens to detonate there, not where the module was authored.
+#   * CALIBRATE STOCHASTIC THRESHOLDS — DON'T GUESS THEM. A gate that pins an ABSOLUTE target on a
+#     stochastic/producer-frontier observable ("the optimizer drives the metric below X", "emergence
+#     reaches level Y") is the M9.T1 trap one level up: the target is unknowable at authoring time, so
+#     a guessed value is either UNSATISFIABLE for any correct impl or trivially green. Prefer a
+#     DIFFERENTIAL — a seed-averaged margin against a baseline computed in the SAME gate run (emergent -
+#     baseline >= margin; intervened <= un-intervened - margin) — which holds regardless of the absolute
+#     level the producer reaches; keep any absolute floor as a SOFT sanity bound only. Where an absolute
+#     number is unavoidable, MEASURE it with a reference/pilot and derive the constant (freeze the
+#     measurement + tolerance, self-checked against the pilot), not a hand-guess. See the freeze-review
+#     step in PLANNING.md and run `raster freeze-review` before `queue`.
 #   * Emit deliverable PATHS RELATIVE TO code/ — NEVER prefixed with code/. The doer roots writes
 #     under code/, so a code/-prefixed path would double (code/code/...); it strips a spurious
 #     leading code/ defensively, but don't author the smell. (IMPLEMENT deliverables live under
@@ -118,9 +128,13 @@
 #     ONE label/key VOCABULARY (note-names vs Roman, "major" vs "maj"), and ONE call/constructor
 #     SIGNATURE per shared object. All drift invisibly past the stubbed collect yet break impl.
 #
-# Per-task contract:   {id, title, worker, depends_on, deliverables, spec, unit_test:{file,cmd}}
-# Per-module contract: {id, name, worker, tasks:[...], gate:{id, integration_test:{file,cmd}, spec},
+# Per-task contract:   {id, title, worker, depends_on, deliverables, spec, unit_test:{file,cmd}, budget?:<sec>}
+# Per-module contract: {id, name, worker, tasks:[...], gate:{id, integration_test:{file,cmd}, spec, budget?:<sec>},
 #                       checkpoint?: <review prompt>}
+#
+# budget?: optional per-task/gate timeout in SECONDS, overriding the global RASTER_TEST_TIMEOUT. Set it
+# for a LEGITIMATELY long test — a GA/optimizer gate over seeded simulation runs — so a slow-but-
+# progressing run isn't killed and misread as a failure. Leave it off for ordinary fast tests.
 #
 # worker = a task's STARTING tier on meta.ladder (mapped to a model via meta.workers).
 # Because escalation only climbs the ladder (never down), a task's start tier is also its
